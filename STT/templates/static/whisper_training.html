@@ -1,0 +1,552 @@
+{% extends 'base.html' %} 
+
+{% block extra_css %}
+<style>
+  .dataset-docs {
+    background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+    border: 1px solid #dee2e6;
+    border-radius: 12px;
+    padding: 25px;
+    margin-bottom: 30px;
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);
+  }
+  
+  .container-fluid {
+    padding-left: 30px;
+    padding-right: 30px;
+  }
+  
+  @media (min-width: 1200px) {
+    .container-fluid {
+      padding-left: 50px;
+      padding-right: 50px;
+    }
+  }
+  
+  @media (min-width: 1400px) {
+    .container-fluid {
+      padding-left: 80px;
+      padding-right: 80px;
+    }
+  }
+  
+  .dataset-docs h4 {
+    color: var(--primary-color);
+    margin-bottom: 15px;
+    font-weight: 600;
+  }
+  
+  /* Form Styling */
+  .training-form {
+    background: white;
+    border-radius: 12px;
+    padding: 30px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+    border: 1px solid #e9ecef;
+  }
+  
+  .form-section {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 25px;
+    border-left: 4px solid var(--primary-color);
+  }
+  
+  .form-section h5 {
+    color: var(--primary-color);
+    margin-bottom: 20px;
+    font-weight: 600;
+    font-size: 1.1rem;
+  }
+  
+  .form-label {
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 8px;
+  }
+  
+  .form-control {
+    border: 2px solid #e9ecef;
+    border-radius: 8px;
+    padding: 12px 15px;
+    font-size: 0.95rem;
+    transition: all 0.3s ease;
+  }
+  
+  .form-control:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(26, 35, 126, 0.25);
+  }
+  
+  .form-select {
+    border: 2px solid #e9ecef;
+    border-radius: 8px;
+    padding: 12px 15px;
+    font-size: 0.95rem;
+    transition: all 0.3s ease;
+  }
+  
+  .form-select:focus {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(26, 35, 126, 0.25);
+  }
+  
+  .form-check-input {
+    width: 1.2em;
+    height: 1.2em;
+    margin-top: 0.1em;
+  }
+  
+  .form-check-input:checked {
+    background-color: var(--primary-color);
+    border-color: var(--primary-color);
+  }
+  
+  .form-check-label {
+    font-weight: 500;
+    color: #495057;
+    margin-left: 8px;
+  }
+  
+  .btn {
+    border-radius: 8px;
+    font-weight: 600;
+    padding: 12px 24px;
+    transition: all 0.3s ease;
+  }
+  
+  .btn-primary {
+    background: linear-gradient(135deg, var(--primary-color) 0%, #3949ab 100%);
+    border: none;
+    box-shadow: 0 4px 15px rgba(26, 35, 126, 0.3);
+  }
+  
+  .btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 20px rgba(26, 35, 126, 0.4);
+  }
+  
+  .btn-outline-info {
+    border: 2px solid #17a2b8;
+    color: #17a2b8;
+    font-weight: 600;
+  }
+  
+  .btn-outline-info:hover {
+    background-color: #17a2b8;
+    border-color: #17a2b8;
+    transform: translateY(-1px);
+  }
+  
+  .btn-outline-success {
+    border: 2px solid #28a745;
+    color: #28a745;
+    font-weight: 600;
+  }
+  
+  .btn-outline-success:hover {
+    background-color: #28a745;
+    border-color: #28a745;
+    transform: translateY(-1px);
+  }
+  
+  .text-muted {
+    color: #6c757d !important;
+    font-size: 0.9rem;
+    font-style: italic;
+  }
+  
+  .input-group {
+    margin-bottom: 15px;
+  }
+  
+  .input-group-text {
+    background-color: #f8f9fa;
+    border: 2px solid #e9ecef;
+    border-right: none;
+    color: #495057;
+    font-weight: 500;
+  }
+  
+  .input-group .form-control {
+    border-left: none;
+  }
+  
+  .input-group .form-control:focus {
+    border-left: none;
+  }
+  
+  .input-group:focus-within .input-group-text {
+    border-color: var(--primary-color);
+  }
+  
+  /* Custom Model Path Field Styling */
+  #custom-model-path {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+    padding: 15px;
+    margin-top: 10px;
+    transition: all 0.3s ease;
+  }
+  
+  #custom-model-path.show {
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(26, 35, 126, 0.1);
+  }
+  
+  #custom-model-path-input {
+    transition: all 0.3s ease;
+  }
+  
+  .code-example {
+    background: #2d3748;
+    color: #e2e8f0;
+    padding: 15px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    overflow-x: auto;
+    margin: 10px 0;
+    white-space: pre-wrap;
+    line-height: 1.6;
+  }
+  
+  .file-structure {
+    background: #1a202c;
+    color: #e2e8f0;
+    padding: 15px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    margin: 10px 0;
+    white-space: pre-wrap;
+    line-height: 1.6;
+  }
+  
+  .requirements-list {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+    border-radius: 6px;
+    padding: 15px;
+    margin: 15px 0;
+  }
+  
+  .requirements-list h6 {
+    color: #856404;
+    margin-bottom: 10px;
+  }
+  
+  .requirements-list ul {
+    margin-bottom: 0;
+    color: #856404;
+  }
+  
+  /* Ensure proper spacing and line breaks throughout the page */
+  .container-fluid {
+    line-height: 1.6;
+  }
+  
+  .dataset-docs {
+    line-height: 1.6;
+  }
+  
+  .dataset-docs p {
+    margin-bottom: 1rem;
+  }
+  
+  .dataset-docs h5 {
+    margin-top: 1.5rem;
+    margin-bottom: 1rem;
+  }
+  
+  .training-form {
+    line-height: 1.6;
+  }
+  
+  .form-section {
+    line-height: 1.6;
+  }
+  
+  .form-label {
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+  
+  .text-muted {
+    display: block;
+    margin-top: 0.25rem;
+  }
+  
+  ul {
+    margin-bottom: 1rem;
+  }
+  
+  li {
+    margin-bottom: 0.25rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid mt-5">
+  <div class="text-center mb-5">
+    <h1 class="display-4 fw-bold text-primary mb-3">
+      <i class="fas fa-cogs me-3"></i>Whisper Model Fine-Tuning
+    </h1>
+    <p class="lead text-muted">Configure and train your custom Whisper model with your own dataset</p>
+  </div>
+  
+  <!-- Dataset Documentation -->
+  <div class="dataset-docs">
+    <h4><i class="fas fa-book me-2"></i>Dataset Structure Requirements</h4>
+    <p>Your dataset must follow this specific structure for successful fine-tuning:</p>
+    
+    <div class="file-structure">
+my_dataset/
+├── train.csv
+├── test.csv
+├── audio_file_1.wav
+├── audio_file_2.wav
+├── audio_file_3.wav
+└── ... (more audio files)
+    </div>
+    
+    <h5>CSV File Format</h5>
+    <p>Both <code>train.csv</code> and <code>test.csv</code> must contain exactly these columns:</p>
+    
+    <div class="code-example">
+audio,sentence
+audio_file_1.wav,Hello, this is a sample audio file
+audio_file_2.wav,The weather is nice today
+audio_file_3.wav,How are you doing?
+    </div>
+    
+    <div class="requirements-list">
+      <h6><i class="fas fa-exclamation-triangle me-1"></i>Important Requirements:</h6>
+      <ul>
+        <li><strong>Column names:</strong> Must be exactly "audio" and "sentence" (case-sensitive)</li>
+        <li><strong>Audio paths:</strong> Relative paths from the dataset directory</li>
+        <li><strong>Audio format:</strong> WAV, MP3, or other common audio formats</li>
+        <li><strong>Audio quality:</strong> 16kHz sample rate recommended (will be converted automatically)</li>
+        <li><strong>Text encoding:</strong> UTF-8 encoding for special characters</li>
+        <li><strong>File size:</strong> Keep individual audio files under 30 seconds for best results</li>
+      </ul>
+    </div>
+    
+    <h5>Example Dataset Creation</h5>
+    <p>Here's how to create a proper dataset from your audio files:</p>
+    
+    <div class="code-example">
+# Python script to create dataset
+import pandas as pd
+import os
+
+# Create train.csv
+train_data = [
+    {"audio": "sample1.wav", "sentence": "Hello world"},
+    {"audio": "sample2.wav", "sentence": "Good morning"},
+    {"audio": "sample3.wav", "sentence": "How are you?"}
+]
+train_df = pd.DataFrame(train_data)
+train_df.to_csv("my_dataset/train.csv", index=False)
+
+# Create test.csv
+test_data = [
+    {"audio": "test1.wav", "sentence": "This is a test"},
+    {"audio": "test2.wav", "sentence": "Fine tuning example"}
+]
+test_df = pd.DataFrame(test_data)
+test_df.to_csv("my_dataset/test.csv", index=False)
+    </div>
+  </div>
+  
+  <div class="training-form">
+    <form method="post">
+      {% csrf_token %}
+
+      <!-- Dataset Configuration Section -->
+      <div class="form-section">
+        <h5><i class="fas fa-folder-open me-2"></i>Dataset Configuration</h5>
+        
+        <!-- Dataset Directory Row -->
+        <div class="row mb-4">
+          <div class="col-12">
+            <label for="{{ form.dataset_dir.id_for_label }}" class="form-label">
+              <i class="fas fa-database me-1"></i>Dataset Directory
+            </label>
+            {{ form.dataset_dir }}
+            <small class="text-muted">
+              <i class="fas fa-info-circle me-1"></i>Absolute path to directory containing train.csv and test.csv files
+            </small>
+            <div class="mt-3">
+              <button type="button" class="btn btn-outline-info" onclick="showDatasetExample()">
+                <i class="fas fa-info-circle me-1"></i>Show Example Structure
+              </button>
+              <a href="{% url 'create-sample-dataset' %}" class="btn btn-outline-success ms-2">
+                <i class="fas fa-download me-1"></i>Create Sample Dataset
+              </a>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Output Directory Row -->
+        <div class="row">
+          <div class="col-12">
+            <label for="{{ form.output_dir.id_for_label }}" class="form-label">
+              <i class="fas fa-save me-1"></i>Output Directory
+            </label>
+            {{ form.output_dir }}
+            <small class="text-muted">
+              <i class="fas fa-info-circle me-1"></i>Directory name where the trained model will be saved (will be created in model/ folder)
+            </small>
+          </div>
+        </div>
+      </div>
+
+      <!-- Model Configuration Section -->
+      <div class="form-section">
+        <h5><i class="fas fa-cogs me-2"></i>Model Configuration</h5>
+        <div class="row">
+          <div class="col-lg-3 col-md-6 mb-3">
+            <label for="{{ form.language.id_for_label }}" class="form-label">
+              <i class="fas fa-language me-1"></i>Language
+            </label>
+            {{ form.language }}
+          </div>
+          <div class="col-lg-3 col-md-6 mb-3">
+            <label for="{{ form.model_selection.id_for_label }}" class="form-label">
+              <i class="fas fa-brain me-1"></i>Model Selection
+            </label>
+            {{ form.model_selection }}
+            <!-- Custom Model Path Field (hidden by default) -->
+            <div id="custom-model-path" class="mt-3" style="display: none;">
+              <label for="custom-model-path-input" class="form-label">
+                <i class="fas fa-folder me-1"></i>Custom Model Path
+              </label>
+              <input type="text" 
+                     class="form-control" 
+                     id="custom-model-path-input" 
+                     name="custom_model_path" 
+                     placeholder="/path/to/your/custom/model"
+                     style="display: none;">
+              <small class="text-muted">
+                <i class="fas fa-info-circle me-1"></i>Enter the path to your custom pre-trained model
+              </small>
+            </div>
+          </div>
+          <div class="col-lg-6">
+            <label class="form-label">
+              <i class="fas fa-sliders-h me-1"></i>Training Options
+            </label>
+            <div class="row">
+              <div class="col-md-6">
+                <div class="form-check mb-2">
+                  {{ form.fp16 }}
+                  <label for="{{ form.fp16.id_for_label }}" class="form-check-label">
+                    <i class="fas fa-microchip me-1"></i>FP16 Precision
+                  </label>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="form-check mb-2">
+                  {{ form.load_best_model }}
+                  <label for="{{ form.load_best_model.id_for_label }}" class="form-check-label">
+                    <i class="fas fa-trophy me-1"></i>Load Best Model
+                  </label>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Training Parameters Section -->
+      <div class="form-section">
+        <h5><i class="fas fa-chart-line me-2"></i>Training Parameters</h5>
+        <div class="row">
+          <div class="col-lg-3 col-md-6 mb-3">
+            <label for="{{ form.save_steps.id_for_label }}" class="form-label">
+              <i class="fas fa-save me-1"></i>Save Steps
+            </label>
+            {{ form.save_steps }}
+            <small class="text-muted">Number of steps between model saves</small>
+          </div>
+          <div class="col-lg-3 col-md-6 mb-3">
+            <label for="{{ form.eval_steps.id_for_label }}" class="form-label">
+              <i class="fas fa-chart-bar me-1"></i>Evaluation Steps
+            </label>
+            {{ form.eval_steps }}
+            <small class="text-muted">Number of steps between evaluations</small>
+          </div>
+          <div class="col-lg-6 d-flex align-items-end">
+            <button type="submit" class="btn btn-primary btn-lg w-100">
+              <i class="fas fa-play me-2"></i>Start Training
+            </button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+function toggleCustomModelField() {
+  const modelSelection = document.querySelector('select[name="model_selection"]');
+  const customPathContainer = document.getElementById('custom-model-path');
+  const customPathInput = document.getElementById('custom-model-path-input');
+  
+  if (modelSelection && customPathContainer && customPathInput) {
+    if (modelSelection.value === 'custom') {
+      customPathContainer.style.display = 'block';
+      customPathInput.style.display = 'block';
+      customPathInput.required = true;
+      customPathContainer.classList.add('show');
+    } else {
+      customPathContainer.style.display = 'none';
+      customPathInput.style.display = 'none';
+      customPathInput.required = false;
+      customPathInput.value = ''; // Clear the value when hidden
+      customPathContainer.classList.remove('show');
+    }
+  }
+}
+
+// Initialize on page load
+document.addEventListener('DOMContentLoaded', function() {
+  toggleCustomModelField();
+  
+  // Add event listener to model selection dropdown
+  const modelSelection = document.querySelector('select[name="model_selection"]');
+  if (modelSelection) {
+    modelSelection.addEventListener('change', toggleCustomModelField);
+  }
+});
+
+function showDatasetExample() {
+  const example = `
+Example Dataset Structure:
+/path/to/my_dataset/
+├── train.csv
+├── test.csv
+├── audio1.wav
+├── audio2.wav
+└── audio3.wav
+
+train.csv content:
+audio,sentence
+audio1.wav,Hello world
+audio2.wav,Good morning
+audio3.wav,How are you?
+
+test.csv content:
+audio,sentence
+audio4.wav,This is a test
+audio5.wav,Fine tuning example
+  `;
+  
+  alert(example);
+}
+</script>
+{% endblock %}

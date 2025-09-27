@@ -1,0 +1,145 @@
+{% extends 'base.html' %}
+
+{% block content %}
+    <h1>My Voice Recordings & Models</h1>
+
+    <div class="btn-group-vertical d-flex">
+        <a href="{% url 'record' %}" class="record-new-btn">Record New Audio</a>
+        <a href="{% url 'fine-tune-whisper' %}" class="record-new-btn">Fine-Tune Model</a>
+    </div>
+
+    <!-- Available Models Section -->
+    <div class="models-section">
+        <h2>Available Models</h2>
+        
+        <!-- Custom Trained Models -->
+        {% if trained_models %}
+        <div class="model-category">
+            <h3>Custom Trained Models</h3>
+            <div class="model-list">
+                {% for model in trained_models %}
+                <div class="model-item">
+                    <div class="model-info">
+                        <strong>{{ model.base_model|title }} - {{ model.language|title }}</strong>
+                        <span class="model-status completed">{{ model.status|title }}</span>
+                    </div>
+                    <div class="model-details">
+                        <small>Created: {{ model.created_at|date:"F j, Y H:i" }}</small>
+                        {% if model.model_path %}
+                        <small>Path: {{ model.model_path }}</small>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Local Model Files -->
+        {% if available_models %}
+        <div class="model-category">
+            <h3>Local Model Files</h3>
+            <div class="model-list">
+                {% for model in available_models %}
+                <div class="model-item">
+                    <div class="model-info">
+                        <strong>{{ model.name }}</strong>
+                        <span class="model-size">{{ model.size_mb }} MB</span>
+                    </div>
+                    <div class="model-details">
+                        <small>Path: {{ model.path }}</small>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Standard Whisper Models -->
+        <div class="model-category">
+            <h3>Standard Whisper Models</h3>
+            <div class="model-list">
+                {% for model in standard_models %}
+                <div class="model-item">
+                    <div class="model-info">
+                        <strong>{{ model.name|title }}</strong>
+                        <span class="model-size">{{ model.size }}</span>
+                    </div>
+                    <div class="model-details">
+                        <small>{{ model.description }}</small>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="recordings-list">
+        {% if recordings %}
+            {% for recording in recordings %}
+            <div class="recording-item" id="recording-{{ recording.id }}">
+                <div class="recording-date">
+                    {{ recording.created_at|date:"F j, Y H:i" }}
+                </div>
+                
+                <audio controls class="recording-audio">
+                    <source src="{{ recording.audio_file.url }}" type="audio/wav">
+                    Your browser does not support the audio element.
+                </audio>
+                
+                <div class="recording-transcript">
+                    <strong>Transcript:</strong><br>
+                    {{ recording.transcript|default:"No transcription available" }}
+                </div>
+                
+                <div class="action-buttons">
+                    <button class="delete-btn" onclick="deleteRecording({{ recording.id }})">
+                        Delete Recording
+                    </button>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <div class="no-recordings">
+                No recordings found. Record your first audio!
+            </div>
+        {% endif %}
+    </div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    function deleteRecording(recordingId) {
+        if (confirm("Are you sure you want to delete this recording?")) {
+            fetch(`/delete-recording/${recordingId}/`, {
+                method: "DELETE",
+                headers: {
+                    "X-CSRFToken": "{{ csrf_token }}",
+                    "Content-Type": "application/json",
+                },
+            })
+                .then((response) => {
+                    if (response.ok) {
+                        // Remove the recording element from the DOM
+                        document.getElementById(`recording-${recordingId}`).remove();
+
+                        // If no recordings left, show message
+                        if (document.querySelectorAll(".recording-item").length === 0) {
+                            document.querySelector(".recordings-list").innerHTML = `
+                                <div class="no-recordings">
+                                    No recordings found. Record your first audio!
+                                </div>
+                            `;
+                        }
+                    } else {
+                        alert("Error deleting recording");
+                    }
+                })
+                .catch((error) => {
+                    console.error("Error:", error);
+                    alert("Error deleting recording");
+                });
+        }
+    }
+</script>
+{% endblock %}

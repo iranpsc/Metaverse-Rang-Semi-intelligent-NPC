@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+
+{% block title %}Download Sample Dataset{% endblock %}
+
+{% block content %}
+<div class="container mt-5">
+  <h2><i class="fas fa-download me-2"></i>Download Sample Dataset</h2>
+  
+  <div class="alert alert-info">
+    <i class="fas fa-info-circle me-2"></i>
+    This tool will generate and download a zip file containing a sample dataset structure with proper CSV files and documentation to help you understand the required format for Whisper fine-tuning.
+  </div>
+
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Dataset Configuration</h5>
+      
+      <form method="post">
+        {% csrf_token %}
+        
+        <div class="row mb-3">
+          <div class="col-md-6">
+            <label for="dataset_name" class="form-label">Dataset Name</label>
+            <input type="text" class="form-control" id="dataset_name" name="dataset_name" 
+                   value="sample_dataset" placeholder="Enter dataset name">
+            <small class="text-muted">This will be the folder name for your sample dataset</small>
+          </div>
+          <div class="col-md-6">
+            <label for="num_samples" class="form-label">Number of Samples</label>
+            <input type="number" class="form-control" id="num_samples" name="num_samples" 
+                   value="10" min="5" max="50">
+            <small class="text-muted">Number of sample entries to create (5-50)</small>
+          </div>
+        </div>
+
+        <div class="alert alert-warning">
+          <h6><i class="fas fa-exclamation-triangle me-1"></i>Important Notes:</h6>
+          <ul class="mb-0">
+            <li>A zip file will be downloaded to your computer</li>
+            <li>It will contain placeholder audio file references</li>
+            <li>You'll need to replace these with actual audio files</li>
+            <li>80% of samples will be for training, 20% for testing</li>
+            <li>Extract the zip file to your desired location before using</li>
+          </ul>
+        </div>
+
+        <div class="d-flex gap-2">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-download me-2"></i>Download Sample Dataset
+          </button>
+          <a href="{% url 'fine-tune-whisper' %}" class="btn btn-secondary">
+            <i class="fas fa-arrow-left me-2"></i>Back to Fine-tuning
+          </a>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="mt-4">
+    <h5>What You'll Get in the Zip File:</h5>
+    <div class="row">
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-body">
+            <h6 class="card-title"><i class="fas fa-file-csv me-2"></i>CSV Files</h6>
+            <ul class="mb-0">
+              <li><code>train.csv</code> - Training data</li>
+              <li><code>test.csv</code> - Test data</li>
+              <li>Proper column structure</li>
+              <li>Sample sentences</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-body">
+            <h6 class="card-title"><i class="fas fa-book me-2"></i>Documentation</h6>
+            <ul class="mb-0">
+              <li><code>README.md</code> - Instructions</li>
+              <li>Audio requirements</li>
+              <li>Next steps guide</li>
+              <li>Best practices</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card">
+          <div class="card-body">
+            <h6 class="card-title"><i class="fas fa-file-audio me-2"></i>Placeholder Audio</h6>
+            <ul class="mb-0">
+              <li>Empty <code>.wav</code> files</li>
+              <li>Correct naming convention</li>
+              <li>Ready for your audio</li>
+              <li>Proper file structure</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

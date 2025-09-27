@@ -1,0 +1,191 @@
+<!-- templates/training_status.html -->
+{% extends 'base.html' %} {% block content %}
+<div class="container mt-5">
+  <h2>Training Status</h2>
+  <div id="status-container">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Task ID: {{ task_id }}</h5>
+        <p class="card-text">
+          Status: <span id="task-status" class="badge bg-secondary">{{ status }}</span>
+        </p>
+        
+        <!-- Progress Bar -->
+        <div class="mt-3">
+          <label class="form-label">Training Progress</label>
+          <div class="progress" style="height: 25px;">
+            <div
+              id="progress-bar"
+              class="progress-bar progress-bar-striped progress-bar-animated"
+              role="progressbar"
+              style="width: 0%"
+              aria-valuenow="0"
+              aria-valuemin="0"
+              aria-valuemax="100"
+            >
+              <span id="progress-text">0%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Training Details -->
+        <div class="mt-3" id="training-details" style="display: none;">
+          <div class="row">
+            <div class="col-md-6">
+              <strong>Current Step:</strong> <span id="current-step">-</span>
+            </div>
+            <div class="col-md-6">
+              <strong>Total Steps:</strong> <span id="total-steps">-</span>
+            </div>
+          </div>
+          <div class="row mt-2">
+            <div class="col-md-6">
+              <strong>Current Loss:</strong> <span id="current-loss">-</span>
+            </div>
+            <div class="col-md-6">
+              <strong>WER:</strong> <span id="current-wer">-</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Real-time Logs -->
+        <div class="mt-4">
+          <h6>Training Logs</h6>
+          <div id="logs-container" class="bg-dark text-light p-3 rounded" style="height: 300px; overflow-y: auto; font-family: monospace; font-size: 0.9rem;">
+            <div id="logs-content">
+              <div class="text-muted">Waiting for training to start...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Result Display -->
+        <div id="task-result" class="mt-3" style="display: none;">
+          {% if result %}
+          <h6>Final Result</h6>
+          <pre class="bg-light p-3 rounded">{{ result }}</pre>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    const taskId = "{{ task_id }}";
+    const statusElement = document.getElementById("task-status");
+    const resultElement = document.getElementById("task-result");
+    const progressBar = document.getElementById("progress-bar");
+    const progressText = document.getElementById("progress-text");
+    const trainingDetails = document.getElementById("training-details");
+    const logsContent = document.getElementById("logs-content");
+    const currentStep = document.getElementById("current-step");
+    const totalSteps = document.getElementById("total-steps");
+    const currentLoss = document.getElementById("current-loss");
+    const currentWer = document.getElementById("current-wer");
+
+    let logs = [];
+
+    function addLog(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString();
+      const logEntry = `[${timestamp}] ${message}`;
+      logs.push(logEntry);
+      
+      // Keep only last 100 logs
+      if (logs.length > 100) {
+        logs = logs.slice(-100);
+      }
+      
+      // Update logs display
+      logsContent.innerHTML = logs.map(log => 
+        `<div class="text-light">${log}</div>`
+      ).join('');
+      
+      // Auto-scroll to bottom
+      const logsContainer = document.getElementById("logs-container");
+      logsContainer.scrollTop = logsContainer.scrollHeight;
+    }
+
+    function updateStatus() {
+      fetch(`/training-status/?task_id=${taskId}`)
+        .then((response) => response.json())
+        .then((data) => {
+          // Update status badge
+          statusElement.textContent = data.status;
+          statusElement.className = 'badge';
+          
+          if (data.status === "SUCCESS") {
+            statusElement.classList.add("bg-success");
+            progressBar.style.width = "100%";
+            progressBar.classList.remove("progress-bar-animated");
+            progressBar.classList.add("bg-success");
+            progressText.textContent = "100% - Completed!";
+            addLog("Training completed successfully!", 'success');
+            clearInterval(interval);
+          } else if (data.status === "FAILURE") {
+            statusElement.classList.add("bg-danger");
+            progressBar.classList.remove("progress-bar-animated");
+            progressBar.classList.add("bg-danger");
+            addLog("Training failed!", 'error');
+            clearInterval(interval);
+          } else if (data.status === "PROGRESS" && data.result) {
+            statusElement.classList.add("bg-warning");
+            trainingDetails.style.display = "block";
+            
+            // Update progress
+            const current = data.result.current || 0;
+            const total = data.result.total || 1;
+            const percent = Math.round((current / total) * 100);
+            
+            progressBar.style.width = `${percent}%`;
+            progressBar.setAttribute('aria-valuenow', percent);
+            progressText.textContent = `${percent}%`;
+            
+            // Update training details
+            currentStep.textContent = current;
+            totalSteps.textContent = total;
+            
+            if (data.result.logs) {
+              addLog(data.result.logs);
+            }
+            
+            // Update loss and WER if available
+            if (data.result.loss) {
+              currentLoss.textContent = data.result.loss;
+            }
+            if (data.result.wer) {
+              currentWer.textContent = data.result.wer;
+            }
+            
+          } else if (data.status === "PENDING") {
+            statusElement.classList.add("bg-secondary");
+            progressBar.style.width = "5%";
+            progressText.textContent = "5% - Pending...";
+            addLog("Task is pending...");
+          } else if (data.status === "STARTED") {
+            statusElement.classList.add("bg-primary");
+            progressBar.style.width = "30%";
+            progressText.textContent = "30% - Started...";
+            addLog("Training started!");
+          }
+
+          // Show final result if available
+          if (data.result && (data.status === "SUCCESS" || data.status === "FAILURE")) {
+            resultElement.style.display = "block";
+            resultElement.innerHTML = `<h6>Final Result</h6><pre class="bg-light p-3 rounded">${JSON.stringify(data.result, null, 2)}</pre>`;
+          }
+        })
+        .catch(error => {
+          addLog(`Error fetching status: ${error.message}`, 'error');
+        });
+    }
+
+    // Initial log
+    addLog("Starting status monitoring...");
+    
+    // Check status every 3 seconds for more responsive updates
+    const interval = setInterval(updateStatus, 3000);
+    updateStatus();
+  });
+</script>
+{% endblock %}

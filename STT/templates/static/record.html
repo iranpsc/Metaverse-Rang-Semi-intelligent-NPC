@@ -1,0 +1,410 @@
+{% extends 'base.html' %}
+
+{% block title %}Audio Recorder{% endblock %}
+
+{% block extra_css %}
+<style>
+  .recorder-container {
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    margin-bottom: 30px;
+  }
+  
+  .control-panel {
+    background: var(--card-bg);
+    padding: 25px;
+    border-radius: 8px;
+    margin-bottom: 25px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+  
+  .button-group {
+    display: flex;
+    gap: 15px;
+    margin: 20px 0;
+    flex-wrap: wrap;
+  }
+  
+  .recorder-btn {
+    padding: 12px 20px;
+    background: var(--secondary-color);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    font-weight: 500;
+    transition: all 0.3s;
+    min-width: 140px;
+  }
+  
+  .recorder-btn:hover:not(:disabled) {
+    background: #27ae60;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+  }
+  
+  .recorder-btn:disabled {
+    background: #95a5a6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+  
+  .recorder-btn.danger {
+    background: var(--danger-color);
+  }
+  
+  .recorder-btn.danger:hover:not(:disabled) {
+    background: #c0392b;
+  }
+  
+  .recorder-btn.primary {
+    background: var(--primary-color);
+  }
+  
+  .recorder-btn.primary:hover:not(:disabled) {
+    background: #0d47a1;
+  }
+  
+  #status {
+    font-weight: 600;
+    margin: 20px 0;
+    min-height: 30px;
+    padding: 10px;
+    background: #f8f9fa;
+    border-radius: 6px;
+    border-left: 4px solid var(--secondary-color);
+  }
+  
+  #playbackContainer {
+    margin: 25px 0;
+    text-align: center;
+    padding: 20px;
+    background: #f8f9fa;
+    border-radius: 8px;
+  }
+  
+  .recording-audio {
+    width: 100%;
+    max-width: 500px;
+    margin: 0 auto;
+    border-radius: 6px;
+  }
+  
+  #transcriptionResult {
+    background: var(--card-bg);
+    padding: 20px;
+    border-radius: 8px;
+    min-height: 80px;
+    white-space: pre-wrap;
+    border-left: 4px solid var(--primary-color);
+    font-family: 'Arial', sans-serif;
+    line-height: 1.6;
+  }
+  
+  .hidden {
+    display: none;
+  }
+  
+  .timer {
+    font-family: 'Courier New', monospace;
+    font-size: 24px;
+    font-weight: bold;
+    color: var(--primary-color);
+    text-align: center;
+    margin: 20px 0;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border: 2px solid var(--secondary-color);
+  }
+  
+  .recorder-section {
+    margin-bottom: 30px;
+  }
+  
+  .recorder-section h3 {
+    color: var(--primary-color);
+    margin-bottom: 15px;
+    font-weight: 600;
+  }
+  
+  .back-btn {
+    margin-top: 20px;
+    text-align: center;
+  }
+  
+  .back-btn .btn {
+    background: var(--primary-color);
+    color: white;
+    padding: 10px 20px;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: all 0.3s;
+  }
+  
+  .back-btn .btn:hover {
+    background: #0d47a1;
+    color: white;
+    text-decoration: none;
+    transform: translateY(-2px);
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="recorder-container">
+  <h1><i class="fas fa-microphone me-2"></i>Audio Recorder</h1>
+
+  <div class="recorder-section">
+    <div class="control-panel">
+      <h3><i class="fas fa-microphone me-2"></i>Record Your Audio</h3>
+
+      <div class="button-group">
+        <button id="startBtn" class="recorder-btn" onclick="startRecording()">
+          <i class="fas fa-play me-2"></i>Start Recording
+        </button>
+        <button id="stopBtn" class="recorder-btn danger" onclick="stopRecording()" disabled>
+          <i class="fas fa-stop me-2"></i>Stop Recording
+        </button>
+      </div>
+
+      <div id="timer" class="timer">00:00</div>
+
+      <div id="status">Ready to record</div>
+
+      <div id="playbackContainer" class="hidden">
+        <h4><i class="fas fa-headphones me-2"></i>Recording Preview</h4>
+        <!-- Audio element will be inserted here -->
+      </div>
+
+      <form id="audioForm" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input
+          type="file"
+          id="audioFile"
+          name="audio_file"
+          accept="audio/*"
+          hidden
+        />
+        <div class="button-group">
+          <button
+            type="button"
+            id="uploadBtn"
+            class="recorder-btn primary"
+            onclick="uploadRecording()"
+            disabled
+          >
+            <i class="fas fa-upload me-2"></i>Upload and Transcribe
+          </button>
+          <button type="button" id="resetBtn" class="recorder-btn" onclick="resetRecorder()">
+            <i class="fas fa-redo me-2"></i>Start Over
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if error %}
+  <div class="alert alert-danger">
+    <i class="fas fa-exclamation-triangle me-2"></i>Error: {{ error }}
+  </div>
+  {% endif %}
+
+  <div id="transcriptionPanel" class="hidden">
+    <div class="recorder-section">
+      <h3><i class="fas fa-file-text me-2"></i>Transcription Result</h3>
+      <div id="transcriptionResult"></div>
+    </div>
+  </div>
+
+  <div class="back-btn">
+    <a href="{% url 'home' %}" class="btn">
+      <i class="fas fa-home me-2"></i>Back to Home
+    </a>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  // Global variables
+  let mediaRecorder;
+  let audioChunks = [];
+  let audioBlob;
+  let startTime;
+  let timerInterval;
+  let audioPreview;
+
+  // DOM elements
+  const startBtn = document.getElementById("startBtn");
+  const stopBtn = document.getElementById("stopBtn");
+  const uploadBtn = document.getElementById("uploadBtn");
+  const resetBtn = document.getElementById("resetBtn");
+  const statusEl = document.getElementById("status");
+  const playbackContainer = document.getElementById("playbackContainer");
+  const timerEl = document.getElementById("timer");
+  const transcriptionPanel = document.getElementById("transcriptionPanel");
+  const transcriptionResult = document.getElementById("transcriptionResult");
+
+  // Start recording function
+  function startRecording() {
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then((stream) => {
+        // Initialize recording
+        mediaRecorder = new MediaRecorder(stream);
+        mediaRecorder.start();
+
+        // Reset chunks array
+        audioChunks = [];
+
+        // Handle data available event
+        mediaRecorder.addEventListener("dataavailable", (event) => {
+          audioChunks.push(event.data);
+        });
+
+        // Start timer
+        startTime = Date.now();
+        updateTimer();
+        timerInterval = setInterval(updateTimer, 1000);
+
+        // Update UI
+        statusEl.textContent = "Recording...";
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        uploadBtn.disabled = true;
+        playbackContainer.classList.add("hidden");
+        transcriptionPanel.classList.add("hidden");
+      })
+      .catch((err) => {
+        console.error("Error accessing microphone:", err);
+        statusEl.textContent =
+          "Error: Could not access microphone. Please check permissions.";
+      });
+  }
+
+  // Stop recording function
+  function stopRecording() {
+    if (!mediaRecorder) return;
+
+    mediaRecorder.stop();
+    clearInterval(timerInterval);
+
+    // Stop all tracks in the stream
+    mediaRecorder.stream.getTracks().forEach((track) => track.stop());
+
+    // Wait for final data
+    mediaRecorder.addEventListener("stop", () => {
+      // Create audio blob
+      audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+      const audioUrl = URL.createObjectURL(audioBlob);
+
+      // Create audio element for preview
+      playbackContainer.innerHTML = "";
+      audioPreview = document.createElement("audio");
+      audioPreview.controls = true;
+      audioPreview.src = audioUrl;
+      audioPreview.className = "recording-audio";
+      playbackContainer.appendChild(audioPreview);
+      playbackContainer.classList.remove("hidden");
+
+      // Update UI
+      statusEl.textContent = "Recording complete. Ready to upload.";
+      startBtn.disabled = true;
+      stopBtn.disabled = true;
+      uploadBtn.disabled = false;
+    });
+  }
+
+  // Upload recording function
+  function uploadRecording() {
+    if (!audioBlob) return;
+
+    // Create a file from the blob
+    const fileInput = document.getElementById("audioFile");
+    const file = new File([audioBlob], "recording.wav", {
+      type: "audio/wav",
+    });
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    fileInput.files = dataTransfer.files;
+
+    // Prepare form data
+    const formData = new FormData(document.getElementById("audioForm"));
+
+    // Show loading state
+    statusEl.textContent = "Uploading and transcribing...";
+    uploadBtn.disabled = true;
+
+    // Submit via AJAX
+    fetch("", {
+      method: "POST",
+      body: formData,
+      headers: {
+        "X-Requested-With": "XMLHttpRequest",
+      },
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("Error during transcription");
+        return response.json();
+      })
+      .then((data) => {
+        // Display transcription
+        transcriptionResult.textContent =
+          data.transcription || "No transcription returned";
+        transcriptionPanel.classList.remove("hidden");
+        statusEl.textContent = "Transcription complete!";
+      })
+      .catch((error) => {
+        console.error("Error:", error);
+        statusEl.textContent =
+          "Error during transcription: " + error.message;
+        transcriptionResult.textContent = "Error: " + error.message;
+        transcriptionPanel.classList.remove("hidden");
+      });
+  }
+
+  // Reset recorder function
+  function resetRecorder() {
+    // Stop any ongoing recording
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+      mediaRecorder.stream.getTracks().forEach((track) => track.stop());
+    }
+
+    // Clear timer
+    clearInterval(timerInterval);
+    timerEl.textContent = "00:00";
+
+    // Reset UI
+    statusEl.textContent = "Ready to record";
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    uploadBtn.disabled = true;
+    playbackContainer.classList.add("hidden");
+    playbackContainer.innerHTML = "";
+    transcriptionPanel.classList.add("hidden");
+
+    // Clear audio data
+    audioChunks = [];
+    audioBlob = null;
+  }
+
+  // Timer update function
+  function updateTimer() {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const minutes = Math.floor(elapsed / 60)
+      .toString()
+      .padStart(2, "0");
+    const seconds = (elapsed % 60).toString().padStart(2, "0");
+    timerEl.textContent = `${minutes}:${seconds}`;
+  }
+
+  // Initialize
+  resetRecorder();
+</script>
+{% endblock %}
