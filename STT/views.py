@@ -354,3 +354,8 @@ sample_2.wav,The weather is beautiful today
         return response
 
     return render(request, 'create_sample_dataset.html')
+
+
+def websocket_test(request):
+    """Serve the WebSocket test page"""
+    return render(request, 'websocket_test.html')

@@ -1,1 +1,11 @@
 **.pt
+**.png
+.vscode/
+test.ipynb
+.env
+db.sqlite3
+**/__pycache__/
+**/.pytest_cache/
+**/__pycache__/
+**.pyc
+**.webp
