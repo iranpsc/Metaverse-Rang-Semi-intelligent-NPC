@@ -158,6 +158,9 @@
 {% block content %}
 <div class="recorder-container">
   <h1><i class="fas fa-microphone me-2"></i>Audio Recorder</h1>
+  {% if selected_model %}
+  <p style="margin-top:6px; color:#666;">Using model: <strong>{{ selected_model }}</strong></p>
+  {% endif %}
 
   <div class="recorder-section">
     <div class="control-panel">
@@ -183,6 +186,9 @@
 
       <form id="audioForm" method="post" enctype="multipart/form-data">
         {% csrf_token %}
+        {% if selected_model %}
+        <input type="hidden" name="model" value="{{ selected_model }}" />
+        {% endif %}
         <input
           type="file"
           id="audioFile"

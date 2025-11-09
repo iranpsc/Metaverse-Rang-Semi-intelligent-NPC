@@ -50,7 +50,7 @@ def home(request):
             'description': 'Good balance of speed and accuracy'},
         {'name': 'small', 'size': '244 MB',
             'description': 'Better accuracy, slower'},
-        {'name': 'medium', 'size': '769 MB', 'description': 'High accuracy, slower'},
+        {'name': 'medium', 'size': '1469 MB', 'description': 'High accuracy, slower'},
         {'name': 'large', 'size': '1550 MB',
             'description': 'Best accuracy, slowest'},
     ]
@@ -65,8 +65,42 @@ def home(request):
     return render(request, 'static/home.html', context)
 
 
-WHISPER_MODEL = whisper.load_model(os.path.join(
-    os.path.dirname(__file__), "model", "Tiny.pt"), device='cpu')
+# Simple in-memory cache of loaded Whisper models by key
+WHISPER_MODELS = {}
+
+
+def _resolve_model_key(model_choice):
+    """Normalize model choice to a cache key and loading arguments.
+
+    Accepts either standard Whisper sizes (e.g., "tiny", "base", ...),
+    a HuggingFace repo id (e.g., "openai/whisper-small"), or a local .pt path.
+    Returns a tuple (cache_key, load_arg, device).
+    """
+    device = 'cpu'
+    if not model_choice:
+        # Default to bundled Tiny model if present; otherwise fallback to standard tiny
+        bundled_path = os.path.join(
+            os.path.dirname(__file__), "model", "Tiny.pt")
+        if os.path.exists(bundled_path):
+            return (bundled_path, bundled_path, device)
+        return ("tiny", "tiny", device)
+
+    # If it's an existing local file, load from path
+    if os.path.exists(model_choice):
+        return (model_choice, model_choice, device)
+
+    # Otherwise treat it as a model name/repo id
+    return (model_choice, model_choice, device)
+
+
+def get_whisper_model(model_choice):
+    """Load or retrieve from cache the requested Whisper model."""
+    cache_key, load_arg, device = _resolve_model_key(model_choice)
+    if cache_key in WHISPER_MODELS:
+        return WHISPER_MODELS[cache_key]
+    model = whisper.load_model(load_arg, device=device)
+    WHISPER_MODELS[cache_key] = model
+    return model
 
 
 def record_audio(request):
@@ -87,8 +121,9 @@ def record_audio(request):
             temp_path = os.path.join(settings.MEDIA_ROOT, 'temp_optimized.wav')
             audio.export(temp_path, format="wav", bitrate="16k")
 
-            # 3. Transcribe
-            model = WHISPER_MODEL  # Make sure this is defined
+            # 3. Transcribe with selected model (fallback handled inside helper)
+            selected_model = request.POST.get('model')
+            model = get_whisper_model(selected_model)
             result = model.transcribe(
                 temp_path,  # Use file path, not AudioSegment object
                 fp16=False,
@@ -127,7 +162,9 @@ def record_audio(request):
                 'message': "kir khar"
             }, status=500)
 
-    return render(request, 'static/record.html')
+    # GET: show recorder; carry through selected model from query param if present
+    selected_model = request.GET.get('model')
+    return render(request, 'static/record.html', {'selected_model': selected_model})
 
 
 @require_http_methods(["DELETE"])
