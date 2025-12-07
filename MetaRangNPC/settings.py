@@ -26,7 +26,12 @@ SECRET_KEY = "django-insecure-!8gw!hh*2$7@)0u&ueyyadgo(r(1skawe%b%-&s7!=@(4$%6a@
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ["npc.irpsc.com", "www.npc.irpsc.com", "localhost", "127.0.0.1"]
+
+CSRF_TRUSTED_ORIGINS = [
+    'https://npc.irpsc.com',
+    'https://www.npc.irpsc.com',
+]
 
 
 # Application definition
@@ -39,6 +44,7 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "STT",
+    "LLM",
     'corsheaders',
     'channels',
 ]
@@ -123,6 +129,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
 STATIC_URL = "static/"
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
