@@ -13,19 +13,32 @@ services:
 
   web:
     build: .
-    command: gunicorn MetaRangNPC.wsgi:application --bind 0.0.0.0:8000
+    command: sh -c "mkdir -p /app/db /app/staticfiles /app/data /app/models && python manage.py migrate && python manage.py collectstatic --noinput || true && python manage.py runserver 0.0.0.0:8000"
     volumes:
       - .:/app
       - db_volume:/app/db
-
+      - staticfiles_volume:/app/staticfiles
+      - data_volume:/app/data
+      # Mount your models directory from host
+      - /home/npc/Documents/Fine-tune-LLM/models:/app/models
     ports:
       - "8000:8000"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     environment:
       - DJANGO_SETTINGS_MODULE=MetaRangNPC.settings
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-/app/models/sentence_embeddings}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/admin/login/').read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   celery-worker:
     build: .
@@ -33,26 +46,41 @@ services:
     volumes:
       - .:/app
       - db_volume:/app/db
+      - data_volume:/app/data
+      - /home/npc/Documents/Fine-tune-LLM/models:/app/models
     depends_on:
-      - redis
-      - web
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
     environment:
       - DJANGO_SETTINGS_MODULE=MetaRangNPC.settings
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-/app/models/sentence_embeddings}
+    restart: unless-stopped
 
   celery-beat:
     build: .
     command: celery -A MetaRangNPC beat --loglevel=info
     volumes:
       - .:/app
+      - db_volume:/app/db
+      - data_volume:/app/data
+      - /home/npc/Documents/Fine-tune-LLM/models:/app/models
     depends_on:
-      - redis
-      - web
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
     environment:
       - DJANGO_SETTINGS_MODULE=MetaRangNPC.settings
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-/app/models/sentence_embeddings}
+    restart: unless-stopped
 
   flower:
     build: .
@@ -60,14 +88,20 @@ services:
     ports:
       - "5555:5555"
     depends_on:
-      - redis
-      - web
+      redis:
+        condition: service_healthy
+      web:
+        condition: service_healthy
     environment:
       - DJANGO_SETTINGS_MODULE=MetaRangNPC.settings
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
-    
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-/app/models/sentence_embeddings}
+    restart: unless-stopped
 
 volumes:
   db_volume:
   redis_data:
+  staticfiles_volume:
+  data_volume:

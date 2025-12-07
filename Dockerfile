@@ -1,5 +1,5 @@
 # Dockerfile
-FROM python:3.9-slim
+FROM python:3.11.9-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE 1
@@ -10,6 +10,7 @@ ENV C_FORCE_ROOT 1  # For Celery
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Create and set working directory
@@ -22,11 +23,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy project
 COPY . .
 
-# Make entrypoint executable
-RUN chmod +x entrypoint.sh
+# Make entrypoint executable (for manual use if needed)
+RUN chmod +x entrypoint.sh || true
 
 # Expose the port
 EXPOSE 8000
 
-# Run entrypoint
-ENTRYPOINT ["/app/entrypoint.sh"]
+# Default command (will be overridden by docker-compose)
+CMD ["/bin/sh"]
