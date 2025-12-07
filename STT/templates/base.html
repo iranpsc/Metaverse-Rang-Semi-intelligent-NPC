@@ -247,6 +247,33 @@
             display: block;
             margin-bottom: 2px;
         }
+        
+        .record-new-btn {
+            padding: 10px 20px;
+            background-color: var(--secondary-color);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .record-new-btn:hover {
+            background-color: #27ae60;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            color: white;
+            text-decoration: none;
+        }
+        
+        h1 {
+            color: var(--primary-color);
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
     </style>
     
     {% block extra_css %}{% endblock %}
@@ -277,7 +304,17 @@
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="{% url 'fine-tune-whisper' %}">
-                            <i class="fas fa-cogs me-1"></i>Fine-Tune
+                            <i class="fas fa-cogs me-1"></i>STT Fine-Tune
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'rag_chat_page' %}">
+                            <i class="fas fa-comments me-1"></i>Chat
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{% url 'rag_chat_page' %}#rag-tools">
+                            <i class="fas fa-tools me-1"></i>RAG Knowledge
                         </a>
                     </li>
                 </ul>

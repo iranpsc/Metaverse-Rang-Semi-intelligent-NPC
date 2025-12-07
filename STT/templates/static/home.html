@@ -1,29 +1,7 @@
 {% extends 'base.html' %}
 
 {% block content %}
-    <h1>My Voice Recordings & Models</h1>
-
-    <div class="btn-group-vertical d-flex">
-        <form id="recordForm" action="{% url 'record' %}" method="get" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
-            <label for="modelSelect" style="font-weight:600;">Model:</label>
-            <select id="modelSelect" name="model" class="form-select" style="max-width:320px;">
-                {% if available_models %}
-                <optgroup label="Local Models">
-                    {% for model in available_models %}
-                    <option value="{{ model.path }}">{{ model.name }} ({{ model.size_mb }} MB)</option>
-                    {% endfor %}
-                </optgroup>
-                {% endif %}
-                <optgroup label="Standard Whisper">
-                    {% for model in standard_models %}
-                    <option value="{{ model.name }}">{{ model.name|title }} - {{ model.description }}</option>
-                    {% endfor %}
-                </optgroup>
-            </select>
-            <button type="submit" class="record-new-btn">Record New Audio</button>
-        </form>
-        <a href="{% url 'fine-tune-whisper' %}" class="record-new-btn">Fine-Tune Model</a>
-    </div>
+    <h1>NPC AI</h1>
 
     <!-- Available Models Section -->
     <div class="models-section">

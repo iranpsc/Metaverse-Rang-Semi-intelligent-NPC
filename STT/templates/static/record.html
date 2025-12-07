@@ -4,6 +4,18 @@
 
 {% block extra_css %}
 <style>
+  h1 {
+    color: var(--primary-color);
+    margin-bottom: 20px;
+    font-weight: 600;
+  }
+  
+  h2 {
+    color: var(--primary-color);
+    margin-bottom: 15px;
+    font-weight: 600;
+  }
+  
   .recorder-container {
     background: white;
     padding: 30px;
@@ -94,16 +106,6 @@
     border-radius: 6px;
   }
   
-  #transcriptionResult {
-    background: var(--card-bg);
-    padding: 20px;
-    border-radius: 8px;
-    min-height: 80px;
-    white-space: pre-wrap;
-    border-left: 4px solid var(--primary-color);
-    font-family: 'Arial', sans-serif;
-    line-height: 1.6;
-  }
   
   .hidden {
     display: none;
@@ -130,6 +132,8 @@
     color: var(--primary-color);
     margin-bottom: 15px;
     font-weight: 600;
+    border-bottom: 2px solid var(--secondary-color);
+    padding-bottom: 10px;
   }
   
   .back-btn {
@@ -152,12 +156,136 @@
     text-decoration: none;
     transform: translateY(-2px);
   }
+  
+  #transcriptionResult {
+    background: var(--card-bg);
+    padding: 20px;
+    border-radius: 8px;
+    min-height: 80px;
+    white-space: pre-wrap;
+    border-left: 4px solid var(--primary-color);
+    font-family: 'Arial', sans-serif;
+    line-height: 1.6;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  }
+  
+  #llmResponseResult {
+    background: var(--card-bg);
+    padding: 20px;
+    border-radius: 8px;
+    min-height: 80px;
+    white-space: pre-wrap;
+    border-left: 4px solid #9b59b6;
+    font-family: 'Arial', sans-serif;
+    line-height: 1.6;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+  }
+
+  /* Vector Store Selector */
+  #vector-store-selector-container {
+    background: white;
+    padding: 15px 20px;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex-wrap: wrap;
+  }
+
+  #vector-store-selector-container label {
+    font-weight: 600;
+    color: var(--primary-color);
+    margin: 0;
+  }
+
+  #vector-store-select {
+    flex: 1;
+    min-width: 200px;
+    padding: 10px;
+    border-radius: 6px;
+    border: 1px solid #ccc;
+    font-size: 0.95rem;
+    background: white;
+    cursor: pointer;
+    transition: all 0.3s;
+  }
+
+  #vector-store-select:focus {
+    outline: none;
+    border-color: var(--secondary-color);
+    box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.1);
+  }
+
+  #vector-store-info {
+    font-size: 0.85rem;
+    color: #777;
+    font-style: italic;
+  }
+
+  #refresh-stores-btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--secondary-color);
+    background: white;
+    color: var(--secondary-color);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  #refresh-stores-btn:hover {
+    background: var(--secondary-color);
+    color: white;
+    transform: translateY(-1px);
+  }
+
+  #refresh-stores-btn:active {
+    transform: translateY(0);
+  }
 </style>
 {% endblock %}
 
 {% block content %}
+<h1>NPC AI - Audio Recorder</h1>
+
+<!-- Model Selection Section -->
+<div class="btn-group-vertical d-flex" style="margin-bottom: 30px;">
+    <form id="modelForm" method="get" action="{% url 'record' %}" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);">
+        <label for="modelSelect" style="font-weight:600;">Model:</label>
+        <select id="modelSelect" name="model" class="form-select" style="max-width:320px;">
+            {% if trained_models %}
+            <optgroup label="Custom Trained Models">
+                {% for model in trained_models %}
+                {% if model.model_path %}
+                <option value="{{ model.model_path }}" {% if selected_model == model.model_path %}selected{% endif %}>{{ model.base_model|title }} - {{ model.language|title }} (Fine-Tuned)</option>
+                {% endif %}
+                {% endfor %}
+            </optgroup>
+            {% endif %}
+            {% if available_models %}
+            <optgroup label="Local Models">
+                {% for model in available_models %}
+                <option value="{{ model.path }}" {% if selected_model == model.path %}selected{% endif %}>{{ model.name }} ({{ model.size_mb }} MB)</option>
+                {% endfor %}
+            </optgroup>
+            {% endif %}
+            <optgroup label="Standard Whisper">
+                {% for model in standard_models %}
+                <option value="{{ model.name }}" {% if selected_model == model.name %}selected{% endif %}>{{ model.name|title }} - {{ model.description }}</option>
+                {% endfor %}
+            </optgroup>
+        </select>
+        <button type="submit" class="record-new-btn">Apply Model</button>
+    </form>
+</div>
+
 <div class="recorder-container">
-  <h1><i class="fas fa-microphone me-2"></i>Audio Recorder</h1>
+  <h2><i class="fas fa-microphone me-2"></i>Audio Recorder</h2>
   {% if selected_model %}
   <p style="margin-top:6px; color:#666;">Using model: <strong>{{ selected_model }}</strong></p>
   {% endif %}
@@ -220,12 +348,46 @@
   </div>
   {% endif %}
 
+  <!-- Vector Store Selector -->
+  <div id="vector-store-selector-container">
+    <label for="vector-store-select">Knowledge Base for RAG Chat:</label>
+    <select id="vector-store-select">
+      <option value="">Loading vector stores...</option>
+    </select>
+    <button id="refresh-stores-btn" title="Refresh vector stores list">
+      <i class="fas fa-sync-alt"></i> Refresh
+    </button>
+    <span id="vector-store-info"></span>
+  </div>
+
   <div id="transcriptionPanel" class="hidden">
     <div class="recorder-section">
       <h3><i class="fas fa-file-text me-2"></i>Transcription Result</h3>
       <div id="transcriptionResult"></div>
+      <div class="button-group" style="margin-top: 15px;">
+        <button type="button" id="proceedToRAGBtn" class="recorder-btn primary" onclick="proceedToRAGChat()" style="display: none;">
+          <i class="fas fa-comments me-2"></i>Start Conversation with RAG Chat
+        </button>
+      </div>
     </div>
   </div>
+
+  {% if llm_available %}
+  <div id="llmResponsePanel" class="hidden">
+    <div class="recorder-section">
+      <h3><i class="fas fa-robot me-2"></i>AI Assistant Response</h3>
+      <div id="llmResponseResult"></div>
+      <div class="button-group" style="margin-top: 15px;">
+        <button type="button" id="askFollowUpBtn" class="recorder-btn primary" onclick="askFollowUp()" style="display: none;">
+          <i class="fas fa-comment me-2"></i>Ask Follow-up Question
+        </button>
+        <button type="button" id="chatWithLLMBtn" class="recorder-btn" onclick="window.location.href='{% url 'rag_chat_page' %}'">
+          <i class="fas fa-comments me-2"></i>Open Chat Interface
+        </button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
 
   <div class="back-btn">
     <a href="{% url 'home' %}" class="btn">
@@ -255,6 +417,16 @@
   const timerEl = document.getElementById("timer");
   const transcriptionPanel = document.getElementById("transcriptionPanel");
   const transcriptionResult = document.getElementById("transcriptionResult");
+  const llmResponsePanel = document.getElementById("llmResponsePanel");
+  const llmResponseResult = document.getElementById("llmResponseResult");
+  const askFollowUpBtn = document.getElementById("askFollowUpBtn");
+  
+  // Vector store selector elements
+  const vectorStoreSelect = document.getElementById("vector-store-select");
+  const vectorStoreInfo = document.getElementById("vector-store-info");
+  const refreshStoresBtn = document.getElementById("refresh-stores-btn");
+  let availableStores = [];
+  let currentVectorStorePath = "";
 
   // Start recording function
   function startRecording() {
@@ -283,8 +455,9 @@
         startBtn.disabled = true;
         stopBtn.disabled = false;
         uploadBtn.disabled = true;
-        playbackContainer.classList.add("hidden");
-        transcriptionPanel.classList.add("hidden");
+    playbackContainer.classList.add("hidden");
+    transcriptionPanel.classList.add("hidden");
+    if (llmResponsePanel) llmResponsePanel.classList.add("hidden");
       })
       .catch((err) => {
         console.error("Error accessing microphone:", err);
@@ -360,10 +533,31 @@
       })
       .then((data) => {
         // Display transcription
-        transcriptionResult.textContent =
-          data.transcription || "No transcription returned";
+        const transcriptionText = data.transcription || "No transcription returned";
+        transcriptionResult.textContent = transcriptionText;
         transcriptionPanel.classList.remove("hidden");
-        statusEl.textContent = "Transcription complete!";
+        
+        // Always show proceed to RAG chat button when transcription panel is visible
+        const proceedBtn = document.getElementById("proceedToRAGBtn");
+        if (proceedBtn && transcriptionText && transcriptionText !== "No transcription returned") {
+          proceedBtn.style.display = "inline-block";
+          proceedBtn.setAttribute("data-transcription", transcriptionText);
+        } else if (proceedBtn) {
+          // Hide button if no valid transcription
+          proceedBtn.style.display = "none";
+        }
+        
+        // Display LLM response if available
+        if (data.llm_response && llmResponsePanel) {
+          llmResponseResult.textContent = data.llm_response;
+          llmResponsePanel.classList.remove("hidden");
+          if (askFollowUpBtn) {
+            askFollowUpBtn.style.display = "inline-block";
+          }
+          statusEl.textContent = "Transcription and AI response complete!";
+        } else {
+          statusEl.textContent = "Transcription complete!";
+        }
       })
       .catch((error) => {
         console.error("Error:", error);
@@ -394,6 +588,13 @@
     playbackContainer.classList.add("hidden");
     playbackContainer.innerHTML = "";
     transcriptionPanel.classList.add("hidden");
+    if (llmResponsePanel) llmResponsePanel.classList.add("hidden");
+    
+    // Hide proceed to RAG chat button
+    const proceedBtn = document.getElementById("proceedToRAGBtn");
+    if (proceedBtn) {
+      proceedBtn.style.display = "none";
+    }
 
     // Clear audio data
     audioChunks = [];
@@ -410,7 +611,209 @@
     timerEl.textContent = `${minutes}:${seconds}`;
   }
 
+  // Ask follow-up question function
+  function askFollowUp() {
+    const transcription = transcriptionResult.textContent.trim();
+    if (!transcription) {
+      alert("No transcription available to ask about.");
+      return;
+    }
+    
+    const question = prompt("Enter your follow-up question:", "");
+    if (!question || !question.trim()) return;
+    
+    // Show loading state
+    if (llmResponseResult) {
+      llmResponseResult.textContent = "در حال پردازش پاسخ...";
+    }
+    if (askFollowUpBtn) {
+      askFollowUpBtn.disabled = true;
+    }
+    
+    // Send to LLM API
+    fetch("{% url 'rag_chat_api' %}", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": "{{ csrf_token }}",
+      },
+      body: JSON.stringify({
+        message: question,
+        user_id: "{{ user_id|default:'anonymous' }}"
+      }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error("Error during LLM processing");
+        return response.json();
+      })
+      .then((data) => {
+        if (llmResponseResult && data.reply) {
+          llmResponseResult.textContent = data.reply;
+        }
+        if (askFollowUpBtn) {
+          askFollowUpBtn.disabled = false;
+        }
+      })
+      .catch((error) => {
+        console.error("Error:", error);
+        if (llmResponseResult) {
+          llmResponseResult.textContent = "Error: " + error.message;
+        }
+        if (askFollowUpBtn) {
+          askFollowUpBtn.disabled = false;
+        }
+      });
+  }
+
+  // Load available vector stores
+  async function loadVectorStores() {
+    try {
+      const response = await fetch("{% url 'list_vector_stores_api' %}");
+      const data = await response.json();
+      availableStores = data.stores || [];
+      
+      // Store current selection
+      const previousSelection = vectorStoreSelect.value;
+      
+      // Clear existing options
+      vectorStoreSelect.innerHTML = "";
+      
+      if (availableStores.length === 0) {
+        vectorStoreSelect.innerHTML = '<option value="">No vector stores available</option>';
+        vectorStoreInfo.textContent = "No knowledge bases found";
+        currentVectorStorePath = "";
+        return;
+      }
+      
+      // Add options for each store
+      let foundPrevious = false;
+      let defaultSelected = false;
+      
+      // First, try to find a non-empty store (not main_store if it's empty)
+      // Check which stores actually have index.faiss files
+      availableStores.forEach((store, index) => {
+        const option = document.createElement("option");
+        option.value = store.path;
+        option.textContent = store.display_name || store.name;
+        vectorStoreSelect.appendChild(option);
+        
+        // Restore previous selection if it still exists
+        if (store.path === previousSelection) {
+          option.selected = true;
+          currentVectorStorePath = store.path;
+          vectorStoreInfo.textContent = `Using: ${store.display_name || store.name}`;
+          foundPrevious = true;
+          defaultSelected = true;
+          console.log("Restored previous vector store selection:", store.path);
+        }
+      });
+      
+      // If no previous selection, select the first non-empty store (skip main_store if empty)
+      if (!foundPrevious) {
+        // Try to find a user store first (they're more likely to have data)
+        const userStore = availableStores.find(s => s.path.includes('user_') && s.path.includes('rss_store'));
+        if (userStore) {
+          const option = vectorStoreSelect.querySelector(`option[value="${userStore.path}"]`);
+          if (option) {
+            option.selected = true;
+            currentVectorStorePath = userStore.path;
+            vectorStoreInfo.textContent = `Using: ${userStore.display_name || userStore.name}`;
+            defaultSelected = true;
+            console.log("Auto-selected user vector store:", userStore.path);
+          }
+        }
+        
+        // If no user store found, select the first one
+        if (!defaultSelected && availableStores.length > 0) {
+          const firstStore = availableStores[0];
+          const option = vectorStoreSelect.querySelector(`option[value="${firstStore.path}"]`);
+          if (option) {
+            option.selected = true;
+            currentVectorStorePath = firstStore.path;
+            vectorStoreInfo.textContent = `Using: ${firstStore.display_name || firstStore.name}`;
+            console.log("Auto-selected first vector store:", firstStore.path);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Error loading vector stores:", error);
+      vectorStoreSelect.innerHTML = '<option value="">Error loading stores</option>';
+      vectorStoreInfo.textContent = "Error loading knowledge bases";
+      currentVectorStorePath = "";
+    }
+  }
+
+  // Handle vector store selection change
+  if (vectorStoreSelect) {
+    vectorStoreSelect.addEventListener("change", (e) => {
+      currentVectorStorePath = e.target.value;
+      const selectedStore = availableStores.find(s => s.path === currentVectorStorePath);
+      if (selectedStore) {
+        vectorStoreInfo.textContent = `Using: ${selectedStore.display_name || selectedStore.name}`;
+        console.log("Vector store selection changed to:", currentVectorStorePath);
+      } else {
+        vectorStoreInfo.textContent = "";
+        console.warn("Selected vector store not found in available stores");
+      }
+    });
+  }
+
+  // Handle refresh button
+  if (refreshStoresBtn) {
+    refreshStoresBtn.addEventListener("click", () => {
+      refreshStoresBtn.disabled = true;
+      refreshStoresBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+      loadVectorStores().then(() => {
+        refreshStoresBtn.disabled = false;
+        refreshStoresBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+      });
+    });
+  }
+
+  // Proceed to RAG Chat function
+  function proceedToRAGChat() {
+    const transcriptionText = transcriptionResult.textContent.trim();
+    if (!transcriptionText || transcriptionText === "No transcription returned") {
+      alert("No transcription available to proceed to RAG chat.");
+      return;
+    }
+    
+    // Get the currently selected vector store path from the select element
+    const selectedVectorStorePath = vectorStoreSelect ? vectorStoreSelect.value : currentVectorStorePath;
+    
+    // Debug logging
+    console.log("Proceeding to RAG Chat with:");
+    console.log("- Transcription:", transcriptionText.substring(0, 50) + "...");
+    console.log("- Selected vector store path:", selectedVectorStorePath || "(none - will use default)");
+    console.log("- currentVectorStorePath variable:", currentVectorStorePath || "(empty)");
+    
+    // Encode the transcription text for URL
+    const encodedText = encodeURIComponent(transcriptionText);
+    
+    // Build URL with transcribed text and vector store path
+    let url = `{% url 'rag_chat_page' %}?transcribed_text=${encodedText}`;
+    
+    // Use the selected value from the dropdown, or fall back to currentVectorStorePath
+    const vectorStorePathToUse = selectedVectorStorePath || currentVectorStorePath;
+    if (vectorStorePathToUse) {
+      const encodedVectorStorePath = encodeURIComponent(vectorStorePathToUse);
+      url += `&vector_store_path=${encodedVectorStorePath}`;
+      console.log("Adding vector_store_path to URL:", vectorStorePathToUse);
+    } else {
+      console.warn("WARNING: No vector store path selected! Will use default (main_store)");
+    }
+    
+    // Navigate to RAG chat page
+    console.log("Navigating to:", url);
+    window.location.href = url;
+  }
+
   // Initialize
   resetRecorder();
+  
+  // Load vector stores on page load
+  if (vectorStoreSelect) {
+    loadVectorStores();
+  }
 </script>
 {% endblock %}

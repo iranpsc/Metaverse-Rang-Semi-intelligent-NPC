@@ -5,6 +5,8 @@ from django.contrib import messages
 from .tasks import run_training_sequence
 from .forms import WhisperTrainingForm
 import os
+import traceback
+from pathlib import Path
 from django.conf import settings
 from django.shortcuts import render, redirect
 from django.core.files.storage import FileSystemStorage
@@ -18,6 +20,13 @@ import pandas as pd
 import zipfile
 import io
 from datetime import datetime
+
+# Import LLM service
+try:
+    from LLM.rag_service import RAGService
+    LLM_AVAILABLE = True
+except ImportError:
+    LLM_AVAILABLE = False
 
 
 def home(request):
@@ -76,7 +85,13 @@ def _resolve_model_key(model_choice):
     a HuggingFace repo id (e.g., "openai/whisper-small"), or a local .pt path.
     Returns a tuple (cache_key, load_arg, device).
     """
-    device = 'cpu'
+    # Auto-detect device: use CUDA if available, otherwise CPU
+    import torch
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    if device == 'cuda':
+        print(f"INFO: Using GPU (CUDA) for Whisper model")
+    else:
+        print(f"INFO: Using CPU for Whisper model (CUDA not available)")
     if not model_choice:
         # Default to bundled Tiny model if present; otherwise fallback to standard tiny
         bundled_path = os.path.join(
@@ -103,9 +118,49 @@ def get_whisper_model(model_choice):
     return model
 
 
+def get_user_id_for_llm(request):
+    """
+    Get user_id for LLM service from authenticated user, session, or request data.
+    """
+    # Try to get from authenticated user first
+    if request.user.is_authenticated:
+        return str(request.user.id)
+    
+    # Try to get from session
+    if 'user_id' in request.session:
+        return str(request.session['user_id'])
+    
+    # Generate a session-based user_id if not exists
+    if 'user_id' not in request.session:
+        import uuid
+        request.session['user_id'] = str(uuid.uuid4())
+    
+    return str(request.session['user_id'])
+
+
+def get_user_memory_path_for_llm(user_id):
+    """
+    Get user-specific memory path for LLM.
+    """
+    BASE_DIR = Path(__file__).resolve().parent.parent.parent
+    MEMORY_BASE_PATH = os.path.join(BASE_DIR, "data/memories")
+    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
+    os.makedirs(user_memory_dir, exist_ok=True)
+    return user_memory_dir
+
+
 def record_audio(request):
-    if request.method == 'POST' and request.FILES.get('audio_file'):
+    if request.method == 'POST':
+        # Handle POST request without audio file
+        if not request.FILES.get('audio_file'):
+            return JsonResponse({
+                'status': 'error',
+                'message': 'No audio file provided'
+            }, status=400)
+        
         fs = FileSystemStorage()
+        filename = None
+        temp_path = None
 
         try:
             # 1. Save the original file first
@@ -143,28 +198,109 @@ def record_audio(request):
             recording.save()
 
             # 5. Clean up temporary file
-            os.remove(temp_path)
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
 
-            return JsonResponse({
+            # 6. Process with LLM if available and text is not empty
+            llm_response = None
+            if LLM_AVAILABLE and text.strip():
+                try:
+                    user_id = get_user_id_for_llm(request)
+                    BASE_DIR = Path(__file__).resolve().parent.parent.parent
+                    VECTOR_STORE_PATH = os.path.join(BASE_DIR, "data/vectorstores/main_store")
+                    memory_path = get_user_memory_path_for_llm(user_id)
+                    
+                    rag_service = RAGService()
+                    llm_response = rag_service.get_answer_for_user(
+                        user_id=user_id,
+                        question=text.strip(),
+                        vector_store_path=VECTOR_STORE_PATH,
+                        memory_path=memory_path
+                    )
+                except Exception as e:
+                    print(f"Error processing with LLM: {e}")
+                    traceback.print_exc()
+                    llm_response = None
+
+            response_data = {
                 'status': 'success',
                 'transcription': text,
                 'audio_url': fs.url(filename)
-            })
+            }
+            
+            if llm_response:
+                response_data['llm_response'] = llm_response
+
+            return JsonResponse(response_data)
 
         except Exception as e:
-            if 'temp_path' in locals() and os.path.exists(temp_path):
-                os.remove(temp_path)
-            if 'filename' in locals():
-                fs.delete(filename)
+            error_trace = traceback.format_exc()
+            print(f"Error in record_audio: {e}")
+            print(error_trace)
+            
+            # Clean up files
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            if filename:
+                try:
+                    fs.delete(filename)
+                except:
+                    pass
 
             return JsonResponse({
                 'status': 'error',
-                'message': "kir khar"
+                'message': str(e)
             }, status=500)
 
     # GET: show recorder; carry through selected model from query param if present
     selected_model = request.GET.get('model')
-    return render(request, 'static/record.html', {'selected_model': selected_model})
+    # Get user_id for the template
+    user_id = get_user_id_for_llm(request)
+    
+    # Get completed fine-tuning jobs (trained models) - same as home view
+    trained_models = FineTuningJob.objects.filter(
+        status='completed').order_by('-created_at')
+    
+    # Get available model files from the model directory (same as home view)
+    model_dir = os.path.join(os.path.dirname(__file__), "model")
+    available_models = []
+
+    if os.path.exists(model_dir):
+        for file in os.listdir(model_dir):
+            if file.endswith('.pt'):
+                model_path = os.path.join(model_dir, file)
+                model_size = os.path.getsize(model_path)
+                model_size_mb = round(model_size / (1024 * 1024), 2)
+                available_models.append({
+                    'name': file,
+                    'path': model_path,
+                    'size_mb': model_size_mb
+                })
+
+    # Standard Whisper models that are available
+    standard_models = [
+        {'name': 'tiny', 'size': '39 MB', 'description': 'Fastest, least accurate'},
+        {'name': 'base', 'size': '74 MB',
+            'description': 'Good balance of speed and accuracy'},
+        {'name': 'small', 'size': '244 MB',
+            'description': 'Better accuracy, slower'},
+        {'name': 'medium', 'size': '1469 MB', 'description': 'High accuracy, slower'},
+        {'name': 'large', 'size': '1550 MB',
+            'description': 'Best accuracy, slowest'},
+    ]
+    
+    context = {
+        'selected_model': selected_model,
+        'user_id': user_id,
+        'llm_available': LLM_AVAILABLE,
+        'trained_models': trained_models,
+        'available_models': available_models,
+        'standard_models': standard_models,
+    }
+    return render(request, 'static/record.html', context)
 
 
 @require_http_methods(["DELETE"])

@@ -53,18 +53,26 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
     async def load_whisper_model(self):
         """Load Whisper model asynchronously"""
         try:
+            # Auto-detect device: use CUDA if available, otherwise CPU
+            import torch
+            device = 'cuda' if torch.cuda.is_available() else 'cpu'
+            if device == 'cuda':
+                print(f"INFO: WebSocket using GPU (CUDA) for Whisper model")
+            else:
+                print(f"INFO: WebSocket using CPU for Whisper model (CUDA not available)")
+            
             model_path = os.path.join(
                 os.path.dirname(__file__), "model", "Tiny.pt")
             if os.path.exists(model_path):
                 # Run model loading in thread pool to avoid blocking
                 loop = asyncio.get_event_loop()
                 self.whisper_model = await loop.run_in_executor(
-                    None, whisper.load_model, model_path, 'cpu'
+                    None, whisper.load_model, model_path, device
                 )
             else:
                 # Fallback to base model
                 self.whisper_model = await loop.run_in_executor(
-                    None, whisper.load_model, 'base', 'cpu'
+                    None, whisper.load_model, 'base', device
                 )
 
             await self.send(text_data=json.dumps({

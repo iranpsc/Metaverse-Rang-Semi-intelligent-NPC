@@ -4,6 +4,22 @@ from datasets import Audio
 import torch
 from dataclasses import dataclass
 from typing import Any, Dict, List, Union
+
+# Compatibility patch for older torch versions expected by transformers.
+try:
+    import torch.utils._pytree as _pytree  # type: ignore
+
+    if not hasattr(_pytree, "register_pytree_node") and hasattr(_pytree, "_register_pytree_node"):
+        def _register_pytree_node_shim(*args, **kwargs):
+            # Transformers>=4.57 passes future kwargs we can safely ignore.
+            kwargs.pop("serialized_type_name", None)
+            kwargs.pop("serialized_parameters", None)
+            return _pytree._register_pytree_node(*args, **kwargs)  # type: ignore[attr-defined]
+
+        _pytree.register_pytree_node = _register_pytree_node_shim  # type: ignore[attr-defined]
+except Exception:
+    pass
+
 from transformers import WhisperFeatureExtractor
 from transformers import WhisperTokenizer
 from transformers import WhisperProcessor
