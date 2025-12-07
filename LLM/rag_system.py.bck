@@ -1,0 +1,353 @@
+# فایل: rag_components.py
+
+from pathlib import Path
+from typing import Dict, List, Optional
+import pandas as pd
+import shutil
+import json
+from datetime import datetime
+
+from langchain_community.vectorstores import FAISS
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
+from langchain.schema import Document
+from langchain.prompts import PromptTemplate
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+from threading import Lock
+
+
+class VectorStoreCache:
+    """Simple in-memory cache keyed by vector store path + mtime to avoid reloading FAISS each request."""
+
+    _cache: Dict[str, Dict[str, object]] = {}
+    _lock = Lock()
+
+    @classmethod
+    def _key(cls, path: Path) -> str:
+        return str(path.resolve())
+
+    @classmethod
+    def get(cls, path: str, embeddings: HuggingFaceEmbeddings) -> Optional[FAISS]:
+        vs_path = Path(path)
+        index_file = vs_path / "index.faiss"
+        if not index_file.exists():
+            return None
+
+        key = cls._key(vs_path)
+        mtime = index_file.stat().st_mtime
+
+        with cls._lock:
+            entry = cls._cache.get(key)
+            if entry and entry["mtime"] == mtime:
+                return entry["store"]  # type: ignore[return-value]
+
+        vectorstore = FAISS.load_local(str(vs_path), embeddings, allow_dangerous_deserialization=True)
+
+        with cls._lock:
+            cls._cache[key] = {"mtime": mtime, "store": vectorstore}
+
+        return vectorstore
+
+    @classmethod
+    def invalidate(cls, path: str):
+        key = cls._key(Path(path))
+        with cls._lock:
+            cls._cache.pop(key, None)
+
+class VectorStoreManager:
+    """مدیریت ساخت و بارگذاری وکتوراستورها."""
+    def __init__(self, embeddings: HuggingFaceEmbeddings, user_id: str = "system", verbose: bool = False):
+        self.embeddings = embeddings
+        self.user_id = user_id
+        self.verbose = verbose
+
+    def _log(self, message: str):
+        if self.verbose: print(f"[VectorStoreManager][{self.user_id}] {message}")
+
+    def _create_documents(self, df: pd.DataFrame) -> List[Document]:
+        documents = []
+        for _, row in df.iterrows():
+            content_parts = [f"{str(col).replace('_', ' ').strip().title()}: {str(val)}"
+                             for col, val in row.items() if pd.notna(val) and str(val).strip() != '']
+            content = "\n".join(content_parts)
+            documents.append(Document(page_content=content, metadata={'user_id': self.user_id}))
+        return documents
+
+    def build(self, dataset_path: str, vector_store_path: str) -> Dict:
+        try:
+            self._log(f"Building vector store from '{dataset_path}' to '{vector_store_path}'")
+            vs_path = Path(vector_store_path)
+            
+            # اگر فولدر وجود داشت و overwrite نبود، رد شو
+            if vs_path.exists() and any(vs_path.iterdir()):
+                 # در سناریو واقعی، شما ممکن است بخواهید این را مدیریت کنید
+                 # اما برای سادگی، فرض می‌کنیم بک‌اند مسیرهای خالی می‌دهد یا ما بازنویسی می‌کنیم.
+                 shutil.rmtree(vs_path)
+                 self._log("Existing vector store found and removed for rebuild.")
+
+            df = pd.read_csv(dataset_path)
+            documents = self._create_documents(df)
+            if not documents:
+                return {"status": "error", "message": "No documents could be created from the dataset."}
+
+            vectorstore = FAISS.from_documents(documents, self.embeddings)
+            vs_path.mkdir(parents=True, exist_ok=True)
+            vectorstore.save_local(str(vs_path))
+            VectorStoreCache.invalidate(str(vs_path))
+            return {"status": "success", "message": f"Vector store built successfully at {vector_store_path}"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def load(self, vector_store_path: str) -> Optional[FAISS]:
+        try:
+            vectorstore = VectorStoreCache.get(vector_store_path, self.embeddings)
+            if vectorstore is None:
+                self._log(f"Vector store at {vector_store_path} missing index.faiss")
+            return vectorstore
+        except Exception as e:
+            self._log(f"Error loading vector store from {vector_store_path}: {e}")
+            VectorStoreCache.invalidate(vector_store_path)
+            return None
+
+class MemoryManager:
+    """مدیریت حافظه کوتاه‌مدت و بلندمدت مکالمات کاربر."""
+
+    def __init__(
+        self,
+        config: dict,
+        user_id: str = "system",
+        embeddings: Optional[HuggingFaceEmbeddings] = None,
+        verbose: bool = False,
+    ):
+        self.config = config
+        self.user_id = user_id
+        self.embeddings = embeddings
+        self.verbose = verbose
+        self.short_term_limit = config.get("SHORT_TERM_MEMORY_SIZE", 10)
+        self.enable_memory = config.get("ENABLE_MEMORY", True)
+        self.enable_long_term_memory = config.get("ENABLE_LONG_TERM_MEMORY", True)
+
+    def _log(self, message: str):
+        if self.verbose:
+            print(f"[MemoryManager][{self.user_id}] {message}")
+
+    def _short_term_file(self, memory_path: str) -> Path:
+        return Path(memory_path) / "short_term_history.json"
+
+    def _long_term_store_path(self, memory_path: str) -> Path:
+        return Path(memory_path) / "long_term_store"
+        
+    def clear(self, memory_path: str) -> Dict:
+        try:
+            mem_path = Path(memory_path)
+            if mem_path.exists():
+                shutil.rmtree(mem_path)
+            mem_path.mkdir(parents=True, exist_ok=True)
+            self._log(f"Memory at {memory_path} cleared.")
+            return {"status": "success", "message": f"Memory at {memory_path} cleared."}
+        except Exception as e:
+            self._log(f"Error clearing memory at {memory_path}: {e}")
+            return {"status": "error", "message": str(e)}
+
+    # --- Short-term memory helpers -------------------------------------------------
+    def get_context(self, memory_path: str) -> str:
+        return self.get_short_term_context(memory_path)
+
+    def get_short_term_context(self, memory_path: str) -> str:
+        if not self.enable_memory:
+            return ""
+
+        history_file = self._short_term_file(memory_path)
+        if not history_file.exists():
+            return ""
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                history = json.load(f)
+            recent_history = history[-self.short_term_limit :]
+            context_text = "\n---\n".join(
+                [f"س: {mem['question']}\nج: {mem['answer']}" for mem in recent_history]
+            )
+            return context_text
+        except Exception as e:
+            self._log(f"Error reading conversation history: {e}")
+            return ""
+
+    def add_interaction(self, memory_path: str, question: str, answer: str):
+        self.add_short_term_interaction(memory_path, question, answer)
+
+    def add_short_term_interaction(self, memory_path: str, question: str, answer: str):
+        if not self.enable_memory:
+            return
+
+        history_file = self._short_term_file(memory_path)
+        history = []
+        if history_file.exists():
+            try:
+                with open(history_file, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+            except Exception:
+                history = []
+        
+        interaction = {"timestamp": datetime.utcnow().isoformat(), "question": question, "answer": answer}
+        history.append(interaction)
+        
+        if len(history) > self.short_term_limit:
+            history = history[-self.short_term_limit :]
+            
+        try:
+            Path(memory_path).mkdir(parents=True, exist_ok=True)
+            with open(history_file, "w", encoding="utf-8") as f:
+                json.dump(history, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self._log(f"Error saving interaction to {memory_path}: {e}")
+
+    # --- Long-term memory helpers --------------------------------------------------
+    def query_long_term_memory(self, memory_path: str, query: str, top_k: int = 3) -> str:
+        if not self.enable_long_term_memory or not self.embeddings:
+            return ""
+
+        vectorstore = self._load_long_term_store(memory_path)
+        if not vectorstore:
+            return ""
+
+        try:
+            docs = vectorstore.similarity_search(query, k=top_k)
+            return "\n---\n".join(doc.page_content for doc in docs)
+        except Exception as e:
+            self._log(f"Error retrieving long-term memory: {e}")
+            return ""
+
+    def store_long_term_memory(self, memory_path: str, question: str, answer: str):
+        if not self.enable_long_term_memory or not self.embeddings:
+            return
+
+        store_path = self._long_term_store_path(memory_path)
+        store_path.mkdir(parents=True, exist_ok=True)
+        memory_text = f"سوال: {question}\nپاسخ: {answer}"
+        metadata = {"user_id": self.user_id, "timestamp": datetime.utcnow().isoformat()}
+
+        vectorstore = self._load_long_term_store(memory_path)
+        try:
+            if vectorstore:
+                vectorstore.add_texts([memory_text], metadatas=[metadata])
+            else:
+                vectorstore = FAISS.from_texts([memory_text], self.embeddings, metadatas=[metadata])
+            vectorstore.save_local(str(store_path))
+        except Exception as e:
+            self._log(f"Error storing long-term memory: {e}")
+
+    def _load_long_term_store(self, memory_path: str) -> Optional[FAISS]:
+        store_path = self._long_term_store_path(memory_path)
+        index_file = store_path / "index.faiss"
+        if not index_file.exists() or not self.embeddings:
+            return None
+        try:
+            return FAISS.load_local(str(store_path), self.embeddings, allow_dangerous_deserialization=True)
+        except Exception as e:
+            self._log(f"Error loading long-term memory store: {e}")
+            return None
+
+class RAGSession:
+    """یک جلسه پرسش و پاسخ که منطق RAG و حافظه را هماهنگ می‌کند."""
+
+    def __init__(self, user_id: str, llm: OllamaLLM, embeddings: HuggingFaceEmbeddings, config: dict):
+        self.user_id = user_id
+        self.llm = llm
+        self.embeddings = embeddings
+        self.config = config
+        self.vstore_manager = VectorStoreManager(embeddings, user_id=self.user_id, verbose=True)
+        self.memory_manager = MemoryManager(
+            config, user_id=self.user_id, embeddings=self.embeddings, verbose=True
+        )
+
+    def _create_rag_chain(self, vectorstore: FAISS, short_term_context: str, long_term_context: str):
+        retriever = vectorstore.as_retriever(
+            search_type=self.config["SEARCH_TYPE"],
+            search_kwargs={"k": self.config.get("TOP_K_RESULTS", 2)},
+        )
+        prompt = PromptTemplate(
+            template="""شما یک دستیار هوشمند هستید. اولویت بالاتر با "زمینه اصلی" است. سپس اگر لازم بود از حافظه بلندمدت و مکالمات اخیر کمک بگیرید. اگر پاسخ در داده‌ها نبود، صادقانه اعلام کنید.
+---
+**۱. زمینه اصلی استخراج‌شده از دیتاست:**
+{context}
+---
+**۲. حافظه بلندمدت کاربر:**
+{long_term_context}
+---
+**۳. تاریخچه مکالمه اخیر:**
+{memory_context}
+---
+**سوال فعلی کاربر:**
+{question}
+---
+**پاسخ:**""",
+            input_variables=["context", "question", "memory_context", "long_term_context"],
+        )
+        
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+
+        rag_chain = (
+            {
+                "context": retriever | format_docs,
+                "question": RunnablePassthrough(),
+                "memory_context": lambda _: short_term_context,
+                "long_term_context": lambda _: long_term_context,
+            }
+            | prompt
+            | self.llm
+            | StrOutputParser()
+        )
+        return rag_chain
+
+    def _prepare_chain(self, question: str, vector_store_path: str, memory_path: str):
+        vectorstore = self.vstore_manager.load(vector_store_path)
+        if not vectorstore:
+            raise ValueError(f"خطا: وکتوراستور در مسیر '{vector_store_path}' یافت نشد یا قابل بارگذاری نیست.")
+
+        short_term_context = self.memory_manager.get_short_term_context(memory_path)
+        long_term_context = self.memory_manager.query_long_term_memory(
+            memory_path, question, self.config.get("LONG_TERM_MEMORY_TOP_K", 3)
+        )
+
+        rag_chain = self._create_rag_chain(vectorstore, short_term_context, long_term_context)
+        return rag_chain, short_term_context, long_term_context
+
+    def get_answer(self, question: str, vector_store_path: str, memory_path: str) -> str:
+        try:
+            rag_chain, _, _ = self._prepare_chain(question, vector_store_path, memory_path)
+        except ValueError as exc:
+            return str(exc)
+
+        answer = rag_chain.invoke(question)
+        self.memory_manager.add_short_term_interaction(memory_path, question, answer)
+        self.memory_manager.store_long_term_memory(memory_path, question, answer)
+        return answer.strip()
+
+    def stream_answer(self, question: str, vector_store_path: str, memory_path: str):
+        """
+        Generator that yields partial chunks of the answer as they are produced.
+        """
+        try:
+            rag_chain, _, _ = self._prepare_chain(question, vector_store_path, memory_path)
+        except ValueError as exc:
+            yield str(exc)
+            return
+
+        chunks: List[str] = []
+        try:
+            for chunk in rag_chain.stream(question):
+                if isinstance(chunk, str):
+                    chunks.append(chunk)
+                    yield chunk
+                elif isinstance(chunk, dict) and "output" in chunk:
+                    # Some LangChain versions yield dicts; handle gracefully.
+                    text = chunk["output"]
+                    chunks.append(text)
+                    yield text
+        finally:
+            final_answer = "".join(chunks).strip()
+            if final_answer:
+                self.memory_manager.add_short_term_interaction(memory_path, question, final_answer)
+                self.memory_manager.store_long_term_memory(memory_path, question, final_answer)

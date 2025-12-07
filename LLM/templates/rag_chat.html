@@ -1,0 +1,733 @@
+{% extends 'base.html' %}
+
+{% block title %}RAG Chat Assistant{% endblock %}
+
+{% block extra_css %}
+<style>
+    :root {
+        --primary-color: #1a237e;
+        --secondary-color: #2ecc71;
+        --danger-color: #e74c3c;
+        --text-color: #2c3e50;
+        --light-bg: #f8f9fa;
+        --card-bg: #f9f9f9;
+    }
+
+    h1 {
+        color: var(--primary-color);
+        margin-bottom: 25px;
+        border-bottom: 2px solid var(--secondary-color);
+        padding-bottom: 10px;
+    }
+
+    /* Chat Container */
+    #chat-container {
+        background: white;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        height: 70vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        margin-bottom: 30px;
+    }
+
+    #chat-box {
+        flex: 1;
+        padding: 20px;
+        overflow-y: auto;
+        background-color: var(--light-bg);
+    }
+
+    .msg {
+        margin: 10px 0;
+        padding: 12px 16px;
+        border-radius: 8px;
+        max-width: 75%;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+
+    .msg.user {
+        background: #d1ecf1;
+        margin-left: auto;
+        text-align: left;
+        border-left: 3px solid var(--primary-color);
+    }
+
+    .msg.bot {
+        background: var(--card-bg);
+        margin-right: auto;
+        text-align: right;
+        border-right: 3px solid var(--secondary-color);
+    }
+
+    #input-row {
+        display: flex;
+        padding: 15px;
+        border-top: 1px solid #e0e0e0;
+        gap: 10px;
+        background: white;
+    }
+
+    #message-input {
+        flex: 1;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        font-size: 1rem;
+    }
+
+    #message-input:focus {
+        outline: none;
+        border-color: var(--secondary-color);
+        box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.1);
+    }
+
+    #send-btn {
+        padding: 10px 20px;
+        border-radius: 6px;
+        border: none;
+        background: var(--secondary-color);
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    #send-btn:hover {
+        background: #27ae60;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    #send-btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none;
+    }
+
+    #status {
+        font-size: 0.9rem;
+        color: #777;
+        padding: 0 15px 10px 15px;
+        background: white;
+        font-style: italic;
+    }
+
+    /* RAG Tools Section */
+    #rag-tools {
+        margin-top: 30px;
+    }
+
+    .tool-card {
+        background: white;
+        border-radius: 10px;
+        padding: 20px;
+        border: 1px solid #e0e0e0;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        margin-bottom: 20px;
+        transition: all 0.3s ease;
+    }
+
+    .tool-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    .tool-card h2 {
+        margin-top: 0;
+        margin-bottom: 20px;
+        font-size: 1.3rem;
+        color: var(--primary-color);
+        border-bottom: 2px solid var(--secondary-color);
+        padding-bottom: 10px;
+    }
+
+    .tool-card form {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 15px;
+    }
+
+    .tool-card form .full-width {
+        grid-column: span 2;
+    }
+
+    .tool-card label {
+        font-size: 0.95rem;
+        color: var(--text-color);
+        font-weight: 600;
+        margin-bottom: 5px;
+        display: block;
+    }
+
+    .tool-card input {
+        width: 100%;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        font-size: 0.95rem;
+        transition: all 0.3s;
+    }
+
+    .tool-card input:focus {
+        outline: none;
+        border-color: var(--secondary-color);
+        box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.1);
+    }
+
+    .tool-card button {
+        padding: 12px 24px;
+        border-radius: 6px;
+        border: none;
+        background: var(--secondary-color);
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        font-size: 1rem;
+    }
+
+    .tool-card button:hover {
+        background: #27ae60;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    .tool-status {
+        margin-top: 15px;
+        font-size: 0.9rem;
+        color: var(--text-color);
+        white-space: pre-wrap;
+        padding: 12px;
+        background: var(--light-bg);
+        border-radius: 6px;
+        border-left: 3px solid var(--secondary-color);
+    }
+
+    /* Button styles matching home.html */
+    .record-new-btn {
+        display: inline-block;
+        padding: 12px 24px;
+        background-color: var(--secondary-color);
+        color: white;
+        text-decoration: none;
+        border-radius: 6px;
+        font-weight: 600;
+        transition: all 0.3s;
+        border: none;
+        cursor: pointer;
+        text-align: center;
+    }
+
+    .record-new-btn:hover {
+        background-color: #27ae60;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        color: white;
+    }
+
+    .delete-btn {
+        background-color: var(--danger-color);
+        color: white;
+        padding: 8px 16px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        transition: all 0.3s;
+    }
+
+    .delete-btn:hover {
+        background-color: #c0392b;
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    /* Vector Store Selector */
+    #vector-store-selector-container {
+        background: white;
+        padding: 15px 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 15px;
+        flex-wrap: wrap;
+    }
+
+    #vector-store-selector-container label {
+        font-weight: 600;
+        color: var(--primary-color);
+        margin: 0;
+    }
+
+    #vector-store-select {
+        flex: 1;
+        min-width: 200px;
+        padding: 10px;
+        border-radius: 6px;
+        border: 1px solid #ccc;
+        font-size: 0.95rem;
+        background: white;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    #vector-store-select:focus {
+        outline: none;
+        border-color: var(--secondary-color);
+        box-shadow: 0 0 0 3px rgba(46, 204, 113, 0.1);
+    }
+
+    #vector-store-info {
+        font-size: 0.85rem;
+        color: #777;
+        font-style: italic;
+    }
+
+    #refresh-stores-btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: 1px solid var(--secondary-color);
+        background: white;
+        color: var(--secondary-color);
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    #refresh-stores-btn:hover {
+        background: var(--secondary-color);
+        color: white;
+        transform: translateY(-1px);
+    }
+
+    #refresh-stores-btn:active {
+        transform: translateY(0);
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+    <h1>RAG Chat Assistant</h1>
+
+    <div id="vector-store-selector-container">
+        <label for="vector-store-select">Knowledge Base:</label>
+        <select id="vector-store-select">
+            <option value="">Loading vector stores...</option>
+        </select>
+        <button id="refresh-stores-btn" title="Refresh vector stores list">
+            <i class="fas fa-sync-alt"></i> Refresh
+        </button>
+        <span id="vector-store-info"></span>
+    </div>
+
+    <div id="chat-container">
+        <div id="chat-box">
+            <div class="msg bot">
+                سلام! من دستیار RAG هستم. سوالت را بپرس 🙂
+            </div>
+        </div>
+
+        <div id="status"></div>
+
+        <div id="input-row">
+            <input
+                id="message-input"
+                type="text"
+                placeholder="سوال خود را بنویسید و Enter بزنید..."
+            />
+            <button id="send-btn">ارسال</button>
+        </div>
+    </div>
+
+    <section id="rag-tools">
+        <div class="tool-card" id="rss-tool">
+            <h2>RSS Feed → RAG</h2>
+            <form id="rss-upload-form">
+                <div class="full-width">
+                    <label for="rss-feed-url">RSS Feed URL</label>
+                    <input id="rss-feed-url" type="url" placeholder="https://example.com/feed" required />
+                </div>
+                <div>
+                    <label for="rss-dataset-name">Dataset Name (optional)</label>
+                    <input id="rss-dataset-name" type="text" placeholder="tech-news" />
+                </div>
+                <div>
+                    <label for="rss-user-id">User ID</label>
+                    <input id="rss-user-id" type="text" value="{{ user_id }}" />
+                </div>
+                <div class="full-width" style="text-align:right;">
+                    <button type="submit">Fetch & Rebuild</button>
+                </div>
+            </form>
+            <div class="tool-status" id="rss-upload-status"></div>
+        </div>
+
+        <div class="tool-card" id="rebuild-tool">
+            <h2>Rebuild Vector Store</h2>
+            <form id="rebuild-form">
+                <div class="full-width">
+                    <label for="dataset-path">Dataset CSV Path</label>
+                    <input id="dataset-path" type="text" placeholder="/absolute/path/to/dataset.csv" required />
+                </div>
+                <div class="full-width">
+                    <label for="vector-store-path">Vector Store Directory</label>
+                    <input id="vector-store-path" type="text" placeholder="/absolute/path/to/vectorstore" required />
+                </div>
+                <div>
+                    <label for="rebuild-user-id">User ID</label>
+                    <input id="rebuild-user-id" type="text" value="{{ user_id }}" />
+                </div>
+                <div></div>
+                <div class="full-width" style="text-align:right;">
+                    <button type="submit">Rebuild Now</button>
+                </div>
+            </form>
+            <div class="tool-status" id="rebuild-status"></div>
+        </div>
+    </section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const chatBox = document.getElementById("chat-box");
+    const messageInput = document.getElementById("message-input");
+    const sendBtn = document.getElementById("send-btn");
+    const statusText = document.getElementById("status");
+    const vectorStoreSelect = document.getElementById("vector-store-select");
+    const vectorStoreInfo = document.getElementById("vector-store-info");
+    const refreshStoresBtn = document.getElementById("refresh-stores-btn");
+    let availableStores = [];
+    let currentVectorStorePath = "";
+    let pendingTranscribedText = null; // Store transcribed text from URL parameter
+
+    // Check for transcribed text in URL parameter
+    function getURLParameter(name) {
+        const urlParams = new URLSearchParams(window.location.search);
+        return urlParams.get(name);
+    }
+
+    // Initialize transcribed text from URL if present
+    const transcribedTextParam = getURLParameter("transcribed_text");
+    if (transcribedTextParam) {
+        pendingTranscribedText = decodeURIComponent(transcribedTextParam);
+        messageInput.value = pendingTranscribedText;
+        // Show a notification that message will be sent after vector store selection
+        statusText.textContent = "Transcribed text loaded. Please select a knowledge base to proceed.";
+    }
+
+    // Check for vector store path in URL parameter
+    let pendingVectorStorePath = null;
+    const vectorStorePathParam = getURLParameter("vector_store_path");
+    if (vectorStorePathParam) {
+        pendingVectorStorePath = decodeURIComponent(vectorStorePathParam);
+        console.log("Received vector_store_path from URL:", pendingVectorStorePath);
+    } else {
+        console.log("No vector_store_path in URL - will use default or selected store");
+    }
+
+    // Auto-send transcribed text after vector store is selected
+    function autoSendTranscribedText() {
+        if (pendingTranscribedText && currentVectorStorePath) {
+            // Clear the pending text to prevent re-sending
+            const textToSend = pendingTranscribedText;
+            pendingTranscribedText = null;
+            
+            // Clear status message
+            statusText.textContent = "";
+            
+            // Small delay to ensure UI is ready
+            setTimeout(() => {
+                messageInput.value = textToSend;
+                sendMessage();
+            }, 500);
+        }
+    }
+
+    // Load available vector stores on page load
+    async function loadVectorStores() {
+        try {
+            const response = await fetch("{% url 'list_vector_stores_api' %}");
+            const data = await response.json();
+            availableStores = data.stores || [];
+            
+            // Store current selection
+            const previousSelection = vectorStoreSelect.value;
+            
+            // Clear existing options
+            vectorStoreSelect.innerHTML = "";
+            
+            if (availableStores.length === 0) {
+                vectorStoreSelect.innerHTML = '<option value="">No vector stores available</option>';
+                vectorStoreInfo.textContent = "No knowledge bases found";
+                currentVectorStorePath = "";
+                return;
+            }
+            
+            // Add options for each store
+            let foundPrevious = false;
+            let foundPendingPath = false;
+            
+            // Normalize paths for comparison (remove trailing slashes, normalize separators)
+            const normalizePath = (path) => path.replace(/[\\/]+$/, '').replace(/\\/g, '/');
+            const normalizedPendingPath = pendingVectorStorePath ? normalizePath(pendingVectorStorePath) : null;
+            
+            availableStores.forEach((store, index) => {
+                const option = document.createElement("option");
+                option.value = store.path;
+                option.textContent = store.display_name || store.name;
+                vectorStoreSelect.appendChild(option);
+                
+                const normalizedStorePath = normalizePath(store.path);
+                
+                // Check if this matches the pending vector store path from URL (with normalized comparison)
+                if (normalizedPendingPath && normalizedStorePath === normalizedPendingPath) {
+                    option.selected = true;
+                    currentVectorStorePath = store.path;
+                    vectorStoreInfo.textContent = `Using: ${store.display_name || store.name}`;
+                    foundPendingPath = true;
+                    foundPrevious = true;
+                    console.log(`✅ Matched pending vector store from URL: ${store.path}`);
+                } else if (normalizedPendingPath) {
+                    // Debug: show why it didn't match
+                    console.log(`Comparing: "${normalizedPendingPath}" vs "${normalizedStorePath}"`);
+                }
+                // Restore previous selection if it still exists and no pending path
+                else if (!foundPendingPath && store.path === previousSelection) {
+                    option.selected = true;
+                    currentVectorStorePath = store.path;
+                    vectorStoreInfo.textContent = `Using: ${store.display_name || store.name}`;
+                    foundPrevious = true;
+                } else if (!foundPrevious && !foundPendingPath && index === 0) {
+                    // Select the first one by default if no previous selection and no pending path
+                    option.selected = true;
+                    currentVectorStorePath = store.path;
+                    vectorStoreInfo.textContent = `Using: ${store.display_name || store.name}`;
+                }
+            });
+            
+            // Clear pending path after processing
+            if (foundPendingPath) {
+                pendingVectorStorePath = null;
+            } else if (pendingVectorStorePath) {
+                console.warn(`Pending vector store path not found: ${pendingVectorStorePath}`);
+                console.log("Available stores:", availableStores.map(s => s.path));
+            }
+            
+            // Auto-send transcribed text if available and vector store is selected
+            if (pendingTranscribedText && currentVectorStorePath) {
+                autoSendTranscribedText();
+            }
+        } catch (error) {
+            console.error("Error loading vector stores:", error);
+            vectorStoreSelect.innerHTML = '<option value="">Error loading stores</option>';
+            vectorStoreInfo.textContent = "Error loading knowledge bases";
+            currentVectorStorePath = "";
+        }
+    }
+
+    // Handle vector store selection change
+    vectorStoreSelect.addEventListener("change", (e) => {
+        currentVectorStorePath = e.target.value;
+        const selectedStore = availableStores.find(s => s.path === currentVectorStorePath);
+        if (selectedStore) {
+            vectorStoreInfo.textContent = `Using: ${selectedStore.display_name || selectedStore.name}`;
+            
+            // Auto-send transcribed text if available
+            if (pendingTranscribedText && currentVectorStorePath) {
+                autoSendTranscribedText();
+            }
+        } else {
+            vectorStoreInfo.textContent = "";
+        }
+    });
+
+    // Handle refresh button
+    refreshStoresBtn.addEventListener("click", () => {
+        refreshStoresBtn.disabled = true;
+        refreshStoresBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        loadVectorStores().then(() => {
+            refreshStoresBtn.disabled = false;
+            refreshStoresBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+        });
+    });
+
+    // Load stores when page loads
+    loadVectorStores();
+
+    function addMessage(text, type) {
+        const div = document.createElement("div");
+        div.classList.add("msg", type);
+        div.textContent = text;
+        chatBox.appendChild(div);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function sendMessage() {
+        const text = messageInput.value.trim();
+        if (!text) return;
+
+        // نمایش پیام کاربر
+        addMessage(text, "user");
+        messageInput.value = "";
+        messageInput.focus();
+
+        // وضعیت
+        statusText.textContent = "در حال پردازش پاسخ...";
+        sendBtn.disabled = true;
+
+        // پیام موقت «در حال فکر کردن...»
+        const thinking = document.createElement("div");
+        thinking.classList.add("msg", "bot");
+        thinking.textContent = "در حال فکر کردن...";
+        chatBox.appendChild(thinking);
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        const botMessage = document.createElement("div");
+        botMessage.classList.add("msg", "bot");
+        botMessage.textContent = "";
+        chatBox.appendChild(botMessage);
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        const payload = {
+            message: text,
+            user_id: "{{ user_id|default:'anonymous' }}",
+            vector_store_path: currentVectorStorePath || ""
+        };
+        
+        // Debug logging
+        console.log("Sending message with payload:", {
+            message: text.substring(0, 50) + "...",
+            user_id: payload.user_id,
+            vector_store_path: payload.vector_store_path || "(empty - will use default)"
+        });
+
+        try {
+            const response = await fetch("{% url 'rag_chat_api' %}", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok || !response.body) {
+                throw new Error("Server returned an empty response");
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+            let buffer = "";
+
+            if (thinking.parentNode) {
+                chatBox.removeChild(thinking);
+            }
+
+            while (true) {
+                const { value, done } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                const events = buffer.split("\n\n");
+                buffer = events.pop() || "";
+
+                for (const event of events) {
+                    if (!event.trim()) continue;
+                    const line = event.trim().replace(/^data:\s*/, "");
+                    if (!line) continue;
+                    const data = JSON.parse(line);
+                    if (data.type === "token") {
+                        botMessage.textContent += data.token;
+                        chatBox.scrollTop = chatBox.scrollHeight;
+                    } else if (data.type === "error") {
+                        botMessage.textContent = `خطا: ${data.message}`;
+                    }
+                }
+            }
+
+            sendBtn.disabled = false;
+            statusText.textContent = "";
+        } catch (err) {
+            console.error(err);
+            if (thinking.parentNode) {
+                chatBox.removeChild(thinking);
+            }
+            botMessage.textContent = "خطای شبکه یا سرور رخ داد.";
+            sendBtn.disabled = false;
+            statusText.textContent = "";
+        }
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    messageInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+
+    // --- RSS Upload ---
+    const rssForm = document.getElementById("rss-upload-form");
+    const rssStatus = document.getElementById("rss-upload-status");
+    rssForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        rssStatus.textContent = "Fetching RSS feed and rebuilding vector store...";
+        const payload = {
+            feed_url: document.getElementById("rss-feed-url").value.trim(),
+            dataset_name: document.getElementById("rss-dataset-name").value.trim(),
+            user_id: document.getElementById("rss-user-id").value.trim(),
+        };
+        try {
+            const response = await fetch("{% url 'rss_upload_api' %}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+            if (response.ok) {
+                rssStatus.textContent = `✅ ${data.message}\nDataset: ${data.dataset.dataset_path}\nVector store: ${data.vector_store_path}`;
+            } else {
+                rssStatus.textContent = `⚠️ ${data.error || "Failed to process RSS feed"}`;
+            }
+        } catch (error) {
+            rssStatus.textContent = `⚠️ RSS upload error: ${error}`;
+        }
+    });
+
+    // --- Vector store rebuild ---
+    const rebuildForm = document.getElementById("rebuild-form");
+    const rebuildStatus = document.getElementById("rebuild-status");
+    rebuildForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        rebuildStatus.textContent = "Rebuilding vector store...";
+        const payload = {
+            dataset_path: document.getElementById("dataset-path").value.trim(),
+            vector_store_path: document.getElementById("vector-store-path").value.trim(),
+            user_id: document.getElementById("rebuild-user-id").value.trim(),
+        };
+        try {
+            const response = await fetch("{% url 'vector_store_rebuild_api' %}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+            if (response.ok) {
+                rebuildStatus.textContent = `✅ Vector store rebuilt at ${data.vector_store_path}`;
+            } else {
+                rebuildStatus.textContent = `⚠️ ${data.error || data.result?.message || "Failed to rebuild vector store"}`;
+            }
+        } catch (error) {
+            rebuildStatus.textContent = `⚠️ Rebuild error: ${error}`;
+        }
+    });
+</script>
+{% endblock %}

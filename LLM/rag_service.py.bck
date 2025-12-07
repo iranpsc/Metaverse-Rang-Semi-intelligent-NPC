@@ -1,0 +1,146 @@
+# فایل نهایی: rag_service.py (نسخه مبتنی بر کلاس)
+
+import torch
+import traceback
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_ollama import OllamaLLM
+from .config import CONFIG
+from .rag_system import RAGSession, VectorStoreManager, MemoryManager, VectorStoreCache
+
+class RAGService:
+    """
+    یک کلاس سرویس که تمام منطق RAG را کپسوله می‌کند.
+    این کلاس از الگوی Singleton برای مدیریت مدل‌های پایه استفاده می‌کند
+    تا از بارگذاری مکرر آنها جلوگیری شود.
+    """
+    _instance = None
+    
+    def __new__(cls, *args, **kwargs):
+        # الگوی Singleton: فقط یک نمونه از این کلاس در کل برنامه وجود خواهد داشت.
+        if cls._instance is None:
+            cls._instance = super(RAGService, cls).__new__(cls)
+            # مقداردهی اولیه فقط در اولین ساخت نمونه انجام می‌شود.
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        # سازنده فقط یک بار اجرا می‌شود.
+        if self._initialized:
+            return
+        
+        print("Initializing RAGService (one-time setup)...")
+        self.config = CONFIG
+        self.embeddings = None
+        self.llm = None
+        self._initialize_base_models()
+        self._initialized = True
+        print("RAGService initialized successfully.")
+
+    def _initialize_base_models(self):
+        """مدل‌های پایه (Embedding و LLM) را بارگذاری می‌کند."""
+        print("Loading Embedding model...")
+        device = 'cuda' if torch.cuda.is_available() and self.config['USE_GPU'] else 'cpu'
+        self.embeddings = HuggingFaceEmbeddings(
+            model_name=self.config['EMBEDDING_MODEL'],
+            model_kwargs={'device': device},
+            encode_kwargs={
+                'batch_size': self.config['EMBEDDING_BATCH_SIZE'],
+                'normalize_embeddings': self.config['NORMALIZE_EMBEDDINGS'],
+            }
+        )
+        print("Embedding model loaded.")
+
+        print("Loading LLM...")
+        self.llm = OllamaLLM(
+            model=self.config['LLM_MODEL'], base_url=self.config['OLLAMA_BASE_URL'],
+            temperature=self.config['TEMPERATURE'], num_predict=self.config['NUM_PREDICT'],
+            repeat_penalty=self.config['REPEAT_PENALTY'], top_k=self.config['TOP_K'],
+            top_p=self.config['TOP_P']
+        )
+        print("LLM loaded.")
+
+    # --- متدهای عمومی (Public API Methods) برای بک‌اند ---
+
+    def build_vector_store(self, dataset_path: str, vector_store_path: str, user_id: str = "system") -> dict:
+        """
+        API Method: یک وکتوراستور از یک فایل دیتاست مشخص می‌سازد.
+        """
+        try:
+            # verbose=True برای اینکه لاگ‌های ساخت در کنسول سرور نمایش داده شوند.
+            vstore_manager = VectorStoreManager(embeddings=self.embeddings, user_id=user_id, verbose=True)
+            result = vstore_manager.build(dataset_path, vector_store_path)
+            VectorStoreCache.invalidate(vector_store_path)
+            return result
+        except Exception as e:
+            print(f"FATAL ERROR in build_vector_store: {e}")
+            traceback.print_exc()
+            return {"status": "error", "message": "A critical internal error occurred during vector store creation."}
+
+    def get_answer_for_user(self, user_id: str, question: str, vector_store_path: str, memory_path: str) -> str:
+        """
+        API Method: تابع اصلی برای پاسخ به یک سوال کاربر.
+        """
+        try:
+            # برای هر درخواست، یک نمونه سبک از RAGSession ساخته می‌شود.
+            rag_session = RAGSession(
+                user_id=user_id,
+                llm=self.llm,
+                embeddings=self.embeddings,
+                config=self.config
+            )
+            
+            print(f"INFO: Processing request for user_id: {user_id}")
+            
+            answer = rag_session.get_answer(
+                question=question,
+                vector_store_path=vector_store_path,
+                memory_path=memory_path
+            )
+            print(f"INFO: Answer for user {user_id}: {answer}")
+            return answer
+
+        except Exception as e:
+            print(f"ERROR in get_answer_for_user for user {user_id}: {e}")
+            traceback.print_exc()
+            return "یک خطای داخلی در پردازش درخواست شما رخ داده است."
+
+    def get_streaming_answer_for_user(self, user_id: str, question: str, vector_store_path: str, memory_path: str):
+        """
+        Generator that yields partial answers for streaming responses.
+        """
+        try:
+            rag_session = RAGSession(
+                user_id=user_id,
+                llm=self.llm,
+                embeddings=self.embeddings,
+                config=self.config
+            )
+
+            print(f"INFO: Streaming request for user_id: {user_id}")
+
+            for chunk in rag_session.stream_answer(
+                question=question,
+                vector_store_path=vector_store_path,
+                memory_path=memory_path
+            ):
+                yield chunk
+            print(f"INFO: Answer for user {user_id}: {chunk}")
+
+        except Exception as e:
+            print(f"ERROR in get_streaming_answer_for_user for user {user_id}: {e}")
+            traceback.print_exc()
+            raise
+
+    def clear_user_memory(self, memory_path: str, user_id: str = "system") -> dict:
+        """
+        API Method: حافظه یک کاربر را بر اساس مسیر داده شده پاک می‌کند.
+        """
+        try:
+            # verbose=True برای دیدن لاگ در کنسول سرور.
+            memory_manager = MemoryManager(config=self.config, user_id=user_id, verbose=True)
+            result = memory_manager.clear(memory_path)
+            return result
+        except Exception as e:
+            print(f"FATAL ERROR in clear_user_memory: {e}")
+            traceback.print_exc()
+            return {"status": "error", "message": "A critical internal error occurred during memory clearing."}
