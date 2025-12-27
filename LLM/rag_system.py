@@ -1,13 +1,13 @@
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Generator
 import pandas as pd
 import shutil
 import json
 from datetime import datetime
 from time import mktime
-
+import time
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import OllamaLLM
 from langchain.schema import Document
 from langchain.prompts import PromptTemplate
@@ -65,63 +65,34 @@ class VectorStoreManager:
     def load(self, vector_store_path: str) -> Optional[FAISS]:
         try:
             vs_path = Path(vector_store_path)
-            index_file = vs_path / "index.faiss"
-            self._log(f"Attempting to load vector store from: {vs_path}")
-            self._log(f"Index file exists: {index_file.exists()}")
-            
-            if not index_file.exists():
-                self._log(f"Vector store index not found at {index_file}")
+            if not (vs_path / "index.faiss").exists():
                 return None
-            
-            vectorstore = FAISS.load_local(str(vs_path), self.embeddings, allow_dangerous_deserialization=True)
-            
-            # Check if vectorstore has any documents
-            if hasattr(vectorstore, 'index') and hasattr(vectorstore.index, 'ntotal'):
-                doc_count = vectorstore.index.ntotal
-                self._log(f"Vector store loaded successfully with {doc_count} documents")
-                if doc_count == 0:
-                    self._log("WARNING: Vector store is empty (0 documents)")
-                    return None
-            else:
-                self._log("WARNING: Could not determine document count in vector store")
-            
-            return vectorstore
+            return FAISS.load_local(str(vs_path), self.embeddings, allow_dangerous_deserialization=True)
         except Exception as e:
-            self._log(f"Error loading vector store from {vector_store_path}: {e}")
-            import traceback
-            self._log(f"Traceback: {traceback.format_exc()}")
+            self._log(f"Error loading vector store: {e}")
             return None
 
     def append_documents(self, new_documents: List[Document], vector_store_path: str):
         """Documents جدید را به vectorstore موجود append می‌کند."""
         try:
-            if not new_documents:
-                self._log("WARNING: No documents to append.")
-                return
-                
             vs_path = Path(vector_store_path)
-            # Ensure directory exists first
-            vs_path.mkdir(parents=True, exist_ok=True)
-            
             vectorstore = None
-            index_file = vs_path / "index.faiss"
             
-            if index_file.exists():
+            if vs_path.exists() and (vs_path / "index.faiss").exists():
                 vectorstore = self.load(vector_store_path)
             
             if vectorstore:
                 vectorstore.add_documents(new_documents)
-                self._log(f"Added {len(new_documents)} documents to existing index.")
+                self._log("Added documents to existing index.")
             else:
                 vectorstore = FAISS.from_documents(new_documents, self.embeddings)
-                self._log(f"Created new index with {len(new_documents)} documents.")
+                self._log("Created new index with documents.")
             
+            vs_path.mkdir(parents=True, exist_ok=True)
             vectorstore.save_local(str(vs_path))
             self._log(f"Successfully saved/updated vector store at {vector_store_path}")
         except Exception as e:
             self._log(f"Error appending documents: {e}")
-            import traceback
-            traceback.print_exc()
             raise e
 
 class MemoryManager:
@@ -168,8 +139,7 @@ class MemoryManager:
         
         interaction = {"timestamp": datetime.now().isoformat(), "question": question, "answer": answer}
         history.append(interaction)
-        # if len(history) > 50: 
-        #     history = history[-50:]
+        if len(history) > 50: history = history[-50:]
             
         try:
             Path(memory_path).mkdir(parents=True, exist_ok=True)
@@ -247,11 +217,11 @@ class RSSUpdater:
                 # پردازش متن کامل (این بخش زمان‌بر است)
                 for entry, pubdate in entries_to_process:
                     try:
-                        # دانلود متن کامل
+                        # دانلود و استخراج متن کامل
                         downloaded = trafilatura.fetch_url(entry.link)
                         if downloaded:
-                            full_text = trafilatura.extract(downloaded)
-                            if full_text:
+                            full_text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+                            if full_text and full_text.strip():
                                 new_entries.append({
                                     'title': getattr(entry, 'title', 'No title'),
                                     'link': getattr(entry, 'link', ''),
@@ -261,6 +231,10 @@ class RSSUpdater:
                                     'source_type': 'rss_auto' # متادیتا برای تشخیص نوع داده
                                 })
                                 self._log(f"Extracted full text for: {entry.title}")
+                            else:
+                                self._log(f"No content extracted from {entry.link}")
+                        else:
+                            self._log(f"Could not download {entry.link}")
                     except Exception as sub_e:
                          self._log(f"Error extracting text from {entry.link}: {sub_e}")
 
@@ -358,14 +332,44 @@ class RAGSession:
             | StrOutputParser()
         )
         return rag_chain
+    
+    def get_answer(self, question: str, vector_store_path: str, memory_path: str) -> Generator[str, None, None]:
 
-    def _create_fallback_chain(self, memory_context: str):
-        """Create a chain without vector store retrieval - uses only LLM and memory."""
+        t_total_start = time.time()
+
+        t0 = time.time()
+        vectorstore = self.vstore_manager.load(vector_store_path)
+        print(f"Load VectorStore: {time.time() - t0:.4f}s")
+
+        if not vectorstore:
+            yield "هنوز دانشی برای شما ذخیره نشده است."
+            return
+
+        t1 = time.time()
+        memory_context = ""
+        if self.config.get('ENABLE_MEMORY', True):
+            memory_context = self.memory_manager.get_context(memory_path)
+
+        # Retrieve relevant documents
+        retriever = vectorstore.as_retriever(search_type=self.config['SEARCH_TYPE'], search_kwargs={"k": self.config.get('TOP_K_RESULTS', 2)})
+        docs = retriever.get_relevant_documents(question)
+        print(f"Retrieved {len(docs)} documents for question: '{question}'")
+        for i, doc in enumerate(docs):
+            print(f"Doc {i+1}: {doc.page_content[:200]}...")
+
+        # Prepare prompt for streaming (bypass StrOutputParser which buffers output)
+        def format_docs(docs):
+            return "\n\n".join(doc.page_content for doc in docs)
+        
         prompt = PromptTemplate(
             template="""شما یک دستیار هوشمند هستید.
-به "سوال کاربر" پاسخ دهید. از دانش عمومی و تجربه خود استفاده کنید.
+با استفاده از "متن مرجع" به "سوال کاربر" پاسخ دهید.
+اگر پاسخ در متن نبود، بگویید "اطلاعاتی ندارم".
 
 *** دستورالعمل: پایان پاسخ حتما [END] بنویسید. ***
+
+متن مرجع:
+{context}
 
 تاریخچه:
 {memory_context}
@@ -374,47 +378,84 @@ class RAGSession:
 {question}
 
 پاسخ:""",
-            input_variables=["question", "memory_context"]
+            input_variables=["context", "question", "memory_context"]
         )
         
-        fallback_chain = (
-            {
-                "question": RunnablePassthrough(),
-                "memory_context": lambda x: memory_context
-            }
-            | prompt
-            | self.llm
-            | StrOutputParser()
+        # Format prompt with retrieved context
+        context = format_docs(docs)
+        formatted_prompt = prompt.format(
+            context=context,
+            question=question,
+            memory_context=memory_context
         )
-        return fallback_chain
-
-    def get_answer(self, question: str, vector_store_path: str, memory_path: str) -> str:
-        self.vstore_manager._log(f"Getting answer for question. Vector store path: {vector_store_path}")
-        vectorstore = self.vstore_manager.load(vector_store_path)
         
-        memory_context = ""
-        if self.config.get('ENABLE_MEMORY', True):
-            memory_context = self.memory_manager.get_context(memory_path)
-        
-        # If vector store is available, use RAG chain
-        if vectorstore:
-            self.vstore_manager._log(f"Using RAG chain with vector store: {vector_store_path}")
-            rag_chain = self._create_rag_chain(vectorstore, memory_context)
-            answer = rag_chain.invoke(question)
-        else:
-            # If no vector store, use fallback chain (LLM only with memory)
-            self.vstore_manager._log(f"Vector store not available at {vector_store_path}, using fallback chain (LLM only)")
-            vs_path = Path(vector_store_path)
-            if vs_path.exists() and not (vs_path / "index.faiss").exists():
-                self.vstore_manager._log(f"Vector store directory exists but is empty: {vector_store_path}")
-            else:
-                self.vstore_manager._log(f"Vector store path does not exist: {vector_store_path}")
-            
-            # Use fallback chain that doesn't require vector store
-            fallback_chain = self._create_fallback_chain(memory_context)
-            answer = fallback_chain.invoke(question)
+        print(f"Prepare Chain & Memory: {time.time() - t1:.4f}s")
+
+        full_answer = ""
+        t_gen_start = time.time()
+        first_token = True
+        chunk_count = 0
+
+        print(f"Starting to stream response for question: {question}", flush=True)
+        # Stream directly from LLM to get token-by-token streaming
+        try:
+            import sys
+            for chunk in self.llm.stream(formatted_prompt):
+                chunk_count += 1
+                
+                # Handle different chunk types from LangChain
+                if hasattr(chunk, 'content'):
+                    chunk_text = chunk.content
+                elif isinstance(chunk, str):
+                    chunk_text = chunk
+                elif hasattr(chunk, 'text'):
+                    chunk_text = chunk.text
+                else:
+                    chunk_text = str(chunk)
+                
+                # Skip empty chunks
+                if not chunk_text:
+                    continue
+                
+                # Only log first few chunks and every 50th chunk to reduce overhead
+                if chunk_count <= 3 or chunk_count % 50 == 0:
+                    print(f"Chunk {chunk_count}: '{chunk_text[:100]}...' (len={len(chunk_text)})", flush=True)
+                if first_token:
+                    print(f"Time To First Token (Latency): {time.time() - t_gen_start:.4f}s", flush=True)
+                    first_token = False
+
+                full_answer += chunk_text
+                # Yield immediately without any delay
+                yield chunk_text
+                sys.stdout.flush()  # Force flush to ensure logs are written immediately
+                
+        except Exception as stream_error:
+            print(f"Error during streaming: {stream_error}")
+            import traceback
+            traceback.print_exc()
+            # Fallback: try using invoke and yield character by character
+            print("Falling back to non-streaming mode...")
+            try:
+                response = self.llm.invoke(formatted_prompt)
+                response_text = response.content if hasattr(response, 'content') else str(response)
+                if response_text:
+                    # Yield in small chunks for better UX even in fallback mode
+                    chunk_size = 10
+                    for i in range(0, len(response_text), chunk_size):
+                        chunk = response_text[i:i+chunk_size]
+                        full_answer += chunk
+                        yield chunk
+            except Exception as fallback_error:
+                print(f"Fallback also failed: {fallback_error}")
+                traceback.print_exc()
+                yield "خطا در تولید پاسخ."
+
+        print(f"Total chunks: {chunk_count}")
+        print(f"Total Text Generation Time: {time.time() - t_gen_start:.4f}s")
+        print(f"Full answer: '{full_answer}'")
 
         if self.config.get('ENABLE_MEMORY', True):
-            self.memory_manager.add_interaction(memory_path, question, answer)
-            
-        return answer.strip()
+            self.memory_manager.add_interaction(memory_path, question, full_answer.strip())
+
+        print(f"Total Process Time: {time.time() - t_total_start:.4f}s")
+        

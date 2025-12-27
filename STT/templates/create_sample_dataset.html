@@ -43,7 +43,9 @@
             <li>Extract the zip file to your desired location before using</li>
           </ul>
         </div>
-
+        ragWebSocket.send(JSON.stringify({message: "SYSTEM TEST", user_id: "test", vector_store_path: ""}));
+        console.log("Sent manual test message");
+        VM264:2 Sent manual test message
         <div class="d-flex gap-2">
           <button type="submit" class="btn btn-primary">
             <i class="fas fa-download me-2"></i>Download Sample Dataset

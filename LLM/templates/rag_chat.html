@@ -315,8 +315,12 @@
 </style>
 {% endblock %}
 
+
+
 {% block content %}
     <h1>RAG Chat Assistant</h1>
+
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 
     <div id="vector-store-selector-container">
         <label for="vector-store-select">Knowledge Base:</label>
@@ -369,6 +373,28 @@
                 </div>
             </form>
             <div class="tool-status" id="rss-upload-status"></div>
+        </div>
+
+        <div class="tool-card" id="url-tool">
+            <h2>Single Article URL → RAG</h2>
+            <form id="url-upload-form">
+                <div class="full-width">
+                    <label for="article-url">Article/Webpage URL</label>
+                    <input id="article-url" type="url" placeholder="https://example.com/article" required />
+                </div>
+                <div>
+                    <label for="article-title">Title (optional)</label>
+                    <input id="article-title" type="text" placeholder="Article title (auto-detected if not provided)" />
+                </div>
+                <div>
+                    <label for="url-user-id">User ID</label>
+                    <input id="url-user-id" type="text" value="{{ user_id }}" />
+                </div>
+                <div class="full-width" style="text-align:right;">
+                    <button type="submit">Add to Knowledge Base</button>
+                </div>
+            </form>
+            <div class="tool-status" id="url-upload-status"></div>
         </div>
 
         <div class="tool-card" id="rebuild-tool">
@@ -571,9 +597,98 @@
         chatBox.scrollTop = chatBox.scrollHeight;
     }
 
+    // Store current message state for streaming
+    let currentThinking = null;
+    let currentBotMessage = null;
+    let currentFirstToken = false;
+    let currentRawText = ""; // Store raw text before Markdown conversion
+    let currentAbortController = null; // For canceling ongoing requests
+    
+    /**
+     * Parse SSE (Server-Sent Events) data from stream
+     * SSE format: "data: {json}\n\n"
+     */
+    function parseSSE(line) {
+        if (line.startsWith("data: ")) {
+            const jsonStr = line.substring(6).trim();
+            if (jsonStr) {
+                try {
+                    return JSON.parse(jsonStr);
+                } catch (e) {
+                    console.error("Failed to parse SSE data:", e, jsonStr);
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Handle SSE message from HTTP streaming response
+     */
+    function handleSSEMessage(data) {
+        if (!data) return;
+        
+        if (data.type === "start") {
+            console.log("Stream started:", data.message);
+            currentRawText = ""; // Reset raw text
+        } else if (data.type === "token") {
+            // Remove thinking message on first token
+            if (!currentFirstToken) {
+                currentFirstToken = true;
+                if (currentThinking && currentThinking.parentNode) {
+                    chatBox.removeChild(currentThinking);
+                }
+            }
+            
+            // Append token immediately
+            currentRawText += data.token;
+            
+            // Convert raw text to Markdown and update HTML
+            currentBotMessage.innerHTML = marked.parse(currentRawText);
+            
+            // Force DOM update and scroll
+            void currentBotMessage.offsetHeight;
+            chatBox.scrollTop = chatBox.scrollHeight;
+        } else if (data.type === "done") {
+            console.log("Stream completed. Total chunks:", data.chunk_count);
+            if (currentThinking && currentThinking.parentNode) {
+                chatBox.removeChild(currentThinking);
+            }
+            sendBtn.disabled = false;
+            statusText.textContent = "";
+            currentThinking = null;
+            currentBotMessage = null;
+            currentFirstToken = false;
+            currentRawText = "";
+            currentAbortController = null;
+        } else if (data.type === "error") {
+            if (currentThinking && currentThinking.parentNode) {
+                chatBox.removeChild(currentThinking);
+            }
+            currentBotMessage.innerHTML = `<span style="color: var(--danger-color);">خطا: ${data.message}</span>`;
+            chatBox.scrollTop = chatBox.scrollHeight;
+            sendBtn.disabled = false;
+            statusText.textContent = "";
+            currentThinking = null;
+            currentBotMessage = null;
+            currentFirstToken = false;
+            currentRawText = "";
+            currentAbortController = null;
+        }
+    }
+    
+    /**
+     * Send message using HTTP streaming (SSE)
+     */
     async function sendMessage() {
         const text = messageInput.value.trim();
         if (!text) return;
+        
+        // Cancel any ongoing request
+        if (currentAbortController) {
+            currentAbortController.abort();
+        }
 
         // نمایش پیام کاربر
         addMessage(text, "user");
@@ -585,17 +700,21 @@
         sendBtn.disabled = true;
 
         // پیام موقت «در حال فکر کردن...»
-        const thinking = document.createElement("div");
-        thinking.classList.add("msg", "bot");
-        thinking.textContent = "در حال فکر کردن...";
-        chatBox.appendChild(thinking);
+        currentThinking = document.createElement("div");
+        currentThinking.classList.add("msg", "bot");
+        currentThinking.textContent = "در حال فکر کردن...";
+        chatBox.appendChild(currentThinking);
         chatBox.scrollTop = chatBox.scrollHeight;
 
-        const botMessage = document.createElement("div");
-        botMessage.classList.add("msg", "bot");
-        botMessage.textContent = "";
-        chatBox.appendChild(botMessage);
+        currentBotMessage = document.createElement("div");
+        currentBotMessage.classList.add("msg", "bot");
+        currentBotMessage.textContent = "";
+        currentBotMessage.style.display = "block";
+        chatBox.appendChild(currentBotMessage);
         chatBox.scrollTop = chatBox.scrollHeight;
+        
+        currentFirstToken = false;
+        currentRawText = "";
 
         const payload = {
             message: text,
@@ -603,66 +722,107 @@
             vector_store_path: currentVectorStorePath || ""
         };
         
-        // Debug logging
-        console.log("Sending message with payload:", {
-            message: text.substring(0, 50) + "...",
-            user_id: payload.user_id,
-            vector_store_path: payload.vector_store_path || "(empty - will use default)"
-        });
-
+        // Create abort controller for this request
+        currentAbortController = new AbortController();
+        
         try {
+            // Send POST request with streaming response
             const response = await fetch("{% url 'rag_chat_api' %}", {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
                 },
                 body: JSON.stringify(payload),
+                signal: currentAbortController.signal
             });
-
-            if (!response.ok || !response.body) {
-                throw new Error("Server returned an empty response");
+            
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
-
+            
+            // Check if response is streaming
+            if (!response.body) {
+                throw new Error("Response body is not available");
+            }
+            
+            // Read the stream
             const reader = response.body.getReader();
-            const decoder = new TextDecoder("utf-8");
+            const decoder = new TextDecoder();
             let buffer = "";
-
-            if (thinking.parentNode) {
-                chatBox.removeChild(thinking);
-            }
-
+            
             while (true) {
-                const { value, done } = await reader.read();
-                if (done) break;
+                const { done, value } = await reader.read();
+                
+                if (done) {
+                    break;
+                }
+                
+                // Decode chunk and add to buffer
                 buffer += decoder.decode(value, { stream: true });
-
-                const events = buffer.split("\n\n");
-                buffer = events.pop() || "";
-
-                for (const event of events) {
-                    if (!event.trim()) continue;
-                    const line = event.trim().replace(/^data:\s*/, "");
-                    if (!line) continue;
-                    const data = JSON.parse(line);
-                    if (data.type === "token") {
-                        botMessage.textContent += data.token;
-                        chatBox.scrollTop = chatBox.scrollHeight;
-                    } else if (data.type === "error") {
-                        botMessage.textContent = `خطا: ${data.message}`;
+                
+                // Process complete SSE messages (separated by \n\n)
+                // Split by double newline to get complete SSE messages
+                const messages = buffer.split("\n\n");
+                // Keep the last incomplete message in buffer
+                buffer = messages.pop() || "";
+                
+                // Process each complete SSE message
+                for (const message of messages) {
+                    if (message.trim()) {
+                        // Each SSE message can have multiple lines, but we only care about "data: " lines
+                        const lines = message.split("\n");
+                        for (const line of lines) {
+                            if (line.trim() && line.startsWith("data: ")) {
+                                const data = parseSSE(line);
+                                if (data) {
+                                    handleSSEMessage(data);
+                                }
+                            }
+                        }
                     }
                 }
             }
-
-            sendBtn.disabled = false;
-            statusText.textContent = "";
-        } catch (err) {
-            console.error(err);
-            if (thinking.parentNode) {
-                chatBox.removeChild(thinking);
+            
+            // Process any remaining buffer
+            if (buffer.trim()) {
+                const lines = buffer.split("\n");
+                for (const line of lines) {
+                    if (line.trim() && line.startsWith("data: ")) {
+                        const data = parseSSE(line);
+                        if (data) {
+                            handleSSEMessage(data);
+                        }
+                    }
+                }
             }
-            botMessage.textContent = "خطای شبکه یا سرور رخ داد.";
+            
+        } catch (error) {
+            if (error.name === 'AbortError') {
+                console.log("Request aborted");
+                return;
+            }
+            
+            console.error("Error sending message:", error);
+            
+            // Clean up UI on error
+            if (currentThinking && currentThinking.parentNode) {
+                chatBox.removeChild(currentThinking);
+            }
+            
+            if (currentBotMessage) {
+                currentBotMessage.innerHTML = `<span style="color: var(--danger-color);">خطا در ارتباط با سرور: ${error.message}</span>`;
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } else {
+                addMessage(`خطا در ارتباط با سرور: ${error.message}`, "bot");
+            }
+            
             sendBtn.disabled = false;
             statusText.textContent = "";
+            currentThinking = null;
+            currentBotMessage = null;
+            currentFirstToken = false;
+            currentRawText = "";
+            currentAbortController = null;
         }
     }
 
@@ -694,11 +854,55 @@
             const data = await response.json();
             if (response.ok) {
                 rssStatus.textContent = `✅ ${data.message}\nDataset: ${data.dataset.dataset_path}\nVector store: ${data.vector_store_path}`;
+                // Refresh vector stores after successful upload
+                loadVectorStores();
             } else {
                 rssStatus.textContent = `⚠️ ${data.error || "Failed to process RSS feed"}`;
             }
         } catch (error) {
             rssStatus.textContent = `⚠️ RSS upload error: ${error}`;
+        }
+    });
+
+    // --- Single URL Upload ---
+    const urlForm = document.getElementById("url-upload-form");
+    const urlStatus = document.getElementById("url-upload-status");
+    urlForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        urlStatus.textContent = "Extracting content from URL and adding to knowledge base...";
+        const urlInput = document.getElementById("article-url");
+        const titleInput = document.getElementById("article-title");
+        const userIdInput = document.getElementById("url-user-id");
+        
+        const payload = {
+            url: urlInput.value.trim(),
+            user_id: userIdInput.value.trim(),
+        };
+        
+        // Add title only if provided
+        if (titleInput.value.trim()) {
+            payload.title = titleInput.value.trim();
+        }
+        
+        try {
+            const response = await fetch("{% url 'url_upload_api' %}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload),
+            });
+            const data = await response.json();
+            if (response.ok) {
+                urlStatus.textContent = `✅ ${data.message}\nTitle: ${data.title}\nURL: ${data.url}\nVector store: ${data.vector_store_path}`;
+                // Clear form on success
+                urlInput.value = "";
+                titleInput.value = "";
+                // Refresh vector stores after successful upload
+                loadVectorStores();
+            } else {
+                urlStatus.textContent = `⚠️ ${data.error || data.message || "Failed to process URL"}`;
+            }
+        } catch (error) {
+            urlStatus.textContent = `⚠️ URL upload error: ${error}`;
         }
     });
 

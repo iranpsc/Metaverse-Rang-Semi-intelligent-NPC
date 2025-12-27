@@ -1,8 +1,12 @@
+import config
+from django import conf
 import torch
 import traceback
 import threading
+from datetime import datetime
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_ollama import OllamaLLM
+import trafilatura
 from .config import CONFIG
 from .rag_system import RAGSession, VectorStoreManager, MemoryManager, RSSUpdater
 
@@ -38,11 +42,17 @@ class RAGService:
             }
         )
         
-        print("Loading LLM...")
-        self.llm = OllamaLLM(
-            model=self.config['LLM_MODEL'], base_url=self.config['OLLAMA_BASE_URL'],
-            temperature=self.config['TEMPERATURE'], num_predict=self.config['NUM_PREDICT'],
-            repeat_penalty=self.config['REPEAT_PENALTY'], top_k=self.config['TOP_K'],
+    def _create_llm(self, model_name: str = None):
+
+        target_model = model_name if model_name else self.config['LLM_MODEL']
+
+        return OllamaLLM(
+            model=target_model,
+            base_url=self.config['OLLAMA_BASE_URL'],
+            temperature=self.config['TEMPERATURE'],
+            num_predict=self.config['NUM_PREDICT'],
+            repeat_penalty=self.config['REPEAT_PENALTY'],
+            top_k=self.config['TOP_K'],
             top_p=self.config['TOP_P'],
             stop=self.config['STOP_TOKENS']
         )
@@ -85,13 +95,7 @@ class RAGService:
             
             # 3. ساخت داکیومنت و آپدیت وکتور استور
             new_docs = updater.create_documents(new_entries)
-            if not new_docs:
-                print(f"WARNING: No documents created from {len(new_entries)} entries for user {user_id}.")
-                return {"status": "warning", "message": "No documents could be created from entries.", "new_count": len(new_entries)}
-            
-            print(f"INFO: Created {len(new_docs)} documents, updating vector store at {vector_store_path}")
             updater.vstore_manager.append_documents(new_docs, vector_store_path)
-            print(f"INFO: Vector store updated successfully at {vector_store_path}")
             
             # 4. ذخیره وضعیت (تاریخ‌ها)
             updater.update_state(new_entries)
@@ -113,19 +117,114 @@ class RAGService:
             print(f"FATAL ERROR: {e}")
             return {"status": "error", "message": str(e)}
 
-    def get_answer_for_user(self, user_id: str, question: str, vector_store_path: str, memory_path: str) -> str:
+    def get_answer_for_user(self, user_id: str, question: str, vector_store_path: str, memory_path: str, model_name: str = None):
+        """
+        Generator function that yields answer chunks from RAG system.
+        Uses yield from to delegate to the inner generator.
+        """
         try:
+            current_llm = self._create_llm(model_name)
+
             rag_session = RAGSession(
                 user_id=user_id,
-                llm=self.llm,
+                llm=current_llm,
                 embeddings=self.embeddings,
                 config=self.config
             )
-            return rag_session.get_answer(question, vector_store_path, memory_path)
+            # Use yield from to delegate to the inner generator
+            yield from rag_session.get_answer(question, vector_store_path, memory_path)
         except Exception as e:
             print(f"ERROR: {e}")
             traceback.print_exc()
-            return "خطای داخلی."
+            
+            yield "خطای داخلی در پردازش درخواست."
+
+    def process_single_url(self, user_id: str, url: str, dataset_path: str, vector_store_path: str, title: str = None) -> dict:
+        """
+        API Method: Process a single article URL and add it to the user's dataset and vector store.
+        
+        Args:
+            user_id: شناسه کاربر
+            url: URL of the article/webpage to process
+            dataset_path: مسیر فایل CSV کاربر
+            vector_store_path: مسیر پوشه وکتور استور کاربر
+            title: Optional title for the article (if not provided, will try to extract from URL)
+        """
+        if not url or not url.strip():
+            return {"status": "error", "message": "URL is required."}
+
+        url = url.strip()
+        print(f"INFO: Processing single URL for user {user_id}: {url}")
+        
+        try:
+            # Extract content from URL using trafilatura
+            print(f"INFO: Extracting content from URL...")
+            
+            # Download and extract content
+            downloaded = trafilatura.fetch_url(url)
+            if not downloaded:
+                return {"status": "error", "message": "Could not download the URL. The page might be inaccessible."}
+            
+            # Extract text content
+            full_text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+            
+            if not full_text or not full_text.strip():
+                return {"status": "error", "message": "Could not extract content from the provided URL. The page might be empty or inaccessible."}
+            
+            # Extract metadata (if available)
+            try:
+                metadata = trafilatura.extract_metadata(downloaded)
+                article_title = title or (getattr(metadata, 'title', None) if metadata else None) or url
+                author = getattr(metadata, 'author', '') if metadata else ""
+                published_date = getattr(metadata, 'date', None) if metadata else None
+                if not published_date:
+                    published_date = datetime.now().isoformat()
+            except Exception as meta_error:
+                print(f"WARNING: Could not extract metadata: {meta_error}")
+                article_title = title or url
+                author = ""
+                published_date = datetime.now().isoformat()
+            
+            # Create entry similar to RSS entry format
+            entry = {
+                'title': article_title,
+                'link': url,
+                'pubDate': published_date,
+                'content': full_text.strip(),
+                'feed_url': url,  # For consistency with RSS format
+                'source_type': 'single_url',  # Metadata to distinguish from RSS
+                'author': author
+            }
+            
+            # Use RSSUpdater's methods to append to dataset and vector store
+            updater = RSSUpdater(
+                embeddings=self.embeddings,
+                dataset_path=dataset_path,
+                vector_store_path=vector_store_path,
+                user_id=user_id,
+                verbose=True
+            )
+            
+            # Append to dataset
+            updater.append_to_dataset([entry])
+            
+            # Create documents and update vector store
+            new_docs = updater.create_documents([entry])
+            updater.vstore_manager.append_documents(new_docs, vector_store_path)
+            
+            print(f"SUCCESS: Processed URL for user {user_id}: {article_title}")
+            return {
+                "status": "success", 
+                "message": f"Successfully added article: {article_title}", 
+                "new_count": 1,
+                "title": article_title,
+                "url": url
+            }
+
+        except Exception as e:
+            print(f"ERROR in process_single_url for user {user_id}: {e}")
+            traceback.print_exc()
+            return {"status": "error", "message": str(e)}
 
     def clear_user_memory(self, memory_path: str, user_id: str = "system") -> dict:
         try:

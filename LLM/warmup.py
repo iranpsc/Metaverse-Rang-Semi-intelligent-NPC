@@ -40,6 +40,9 @@ def _warmup():
     # Warm LLM weights
     try:
         start_time = time.time()
+        # Create LLM instance if not already created
+        if rag_service.llm is None:
+            rag_service.llm = rag_service._create_llm()
         rag_service.llm.invoke("سلام! این یک درخواست تست برای راه‌اندازی مدل است.")
         duration = time.time() - start_time
         print(f"[RAG Warmup] LLM responded to warmup prompt in {duration:.2f} seconds.")
@@ -55,6 +58,9 @@ def _keepalive_loop(interval: int):
     rag_service = RAGService()
     while True:
         try:
+            # Create LLM instance if not already created
+            if rag_service.llm is None:
+                rag_service.llm = rag_service._create_llm()
             rag_service.llm.invoke("ping")
             print("[RAG Warmup] Sent keep-alive ping to LLM.")
         except Exception as exc:

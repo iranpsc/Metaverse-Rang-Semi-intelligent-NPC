@@ -132,6 +132,10 @@ def chat_page(request):
 
 @csrf_exempt
 def rag_chat_api(request):
+    """
+    HTTP Streaming API endpoint for RAG chat using Server-Sent Events (SSE).
+    Returns a StreamingHttpResponse that streams response tokens in real-time.
+    """
     if request.method != "POST":
         return JsonResponse({"error": "Only POST allowed"}, status=405)
 
@@ -149,7 +153,6 @@ def rag_chat_api(request):
         vector_store_path = resolve_vector_store_path(user_id)
     else:
         # Validate that the provided path exists and has an index
-        # The path from frontend should already be absolute, but handle both cases
         if not os.path.isabs(vector_store_path):
             # If relative, assume it's relative to VECTOR_STORE_BASE_PATH
             vector_store_path = os.path.join(VECTOR_STORE_BASE_PATH, vector_store_path)
@@ -159,12 +162,9 @@ def rag_chat_api(request):
         
         index_file = os.path.join(vector_store_path, "index.faiss")
         if not os.path.exists(index_file):
-            print(f"ERROR: Vector store index not found at {index_file}")
-            print(f"Vector store path provided: {data.get('vector_store_path', '')}")
-            print(f"Resolved path: {vector_store_path}")
-            return JsonResponse({"error": f"Vector store not found at {vector_store_path}. Index file missing: {index_file}"}, status=404)
-        
-        print(f"INFO: Using vector store at: {vector_store_path}")
+            return JsonResponse({
+                "error": f"Vector store not found at {vector_store_path}. Index file missing: {index_file}"
+            }, status=404)
 
     if not question:
         return JsonResponse({"error": "Message is empty"}, status=400)
@@ -173,30 +173,78 @@ def rag_chat_api(request):
     rag_service = RAGService()
 
     def event_stream():
+        """
+        Generator function that streams Server-Sent Events (SSE) for HTTP streaming.
+        Yields SSE-formatted messages containing response tokens in real-time.
+        """
+        import sys
+        
+        # Send initial connection confirmation
+        initial_msg = f"data: {json.dumps({'type': 'start', 'message': 'Starting response generation...'}, ensure_ascii=False)}\n\n"
+        yield initial_msg
+        sys.stdout.flush()
+        
         try:
-            answer = rag_service.get_answer_for_user(
+            # Get answer generator from RAG service
+            answer_generator = rag_service.get_answer_for_user(
                 user_id=user_id,
                 question=question,
                 vector_store_path=vector_store_path,
                 memory_path=memory_path
             )
-            # Stream the answer character by character for real-time effect
-            if isinstance(answer, str):
-                for char in answer:
-                    payload = json.dumps({"type": "token", "token": char}, ensure_ascii=False)
-                    yield f"data: {payload}\n\n"
-            else:
-                # If it's already a generator/iterator
-                for chunk in answer:
-                    payload = json.dumps({"type": "token", "token": chunk}, ensure_ascii=False)
-                    yield f"data: {payload}\n\n"
-            yield f"data: {json.dumps({'type': 'done', 'user_id': user_id}, ensure_ascii=False)}\n\n"
+            
+            # Stream chunks directly from the generator in real-time
+            chunk_count = 0
+            for chunk in answer_generator:
+                # Skip empty chunks
+                if not chunk or not chunk.strip():
+                    continue
+                    
+                chunk_count += 1
+                
+                # Format as SSE message
+                payload = json.dumps({
+                    "type": "token", 
+                    "token": chunk
+                }, ensure_ascii=False)
+                sse_message = f"data: {payload}\n\n"
+                yield sse_message
+                sys.stdout.flush()
+            
+            # Send completion signal
+            done_msg = f"data: {json.dumps({'type': 'done', 'user_id': user_id, 'chunk_count': chunk_count}, ensure_ascii=False)}\n\n"
+            yield done_msg
+            sys.stdout.flush()
+            
+        except GeneratorExit:
+            # Client disconnected - this is normal for HTTP streaming
+            raise
         except Exception as exc:
-            error_payload = json.dumps({"type": "error", "message": str(exc)}, ensure_ascii=False)
+            # Send error message via SSE
+            error_payload = json.dumps({
+                "type": "error", 
+                "message": str(exc)
+            }, ensure_ascii=False)
             yield f"data: {error_payload}\n\n"
+            sys.stdout.flush()
 
-    response = StreamingHttpResponse(event_stream(), content_type="text/event-stream")
-    response["Cache-Control"] = "no-cache"
+    # Create HTTP streaming response with SSE content type
+    response = StreamingHttpResponse(
+        event_stream(), 
+        content_type="text/event-stream"
+    )
+    
+    # Set headers for proper SSE/HTTP streaming
+    response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response["Pragma"] = "no-cache"
+    response["Expires"] = "0"
+    response["X-Accel-Buffering"] = "no"  # Disable buffering in nginx
+    
+    # CORS headers
+    response["Access-Control-Allow-Origin"] = "*"
+    response["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response["Access-Control-Allow-Headers"] = "Content-Type"
+    
     return response
 
 
@@ -269,6 +317,67 @@ def upload_rss_feed(request):
         "vector_store_exists": vector_store_exists,
         "rss_links": rss_links,
         "schema": RSS_SCHEMA,
+    }
+    return JsonResponse(response, status=status_code)
+
+
+@csrf_exempt
+def upload_single_url(request):
+    """
+    API endpoint to process a single article/webpage URL and add it to the user's knowledge base.
+    Similar to RSS upload but for individual URLs.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Only POST allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON payload"}, status=400)
+
+    user_id = str(data.get("user_id") or get_user_id(request))
+    url = data.get("url", "").strip()
+    title = data.get("title", "").strip() or None  # Optional title
+    
+    if not url:
+        return JsonResponse({"error": "URL is required"}, status=400)
+    
+    # Validate URL format (basic check)
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return JsonResponse({"error": "Invalid URL format. URL must start with http:// or https://"}, status=400)
+
+    # Build dataset path for user (same CSV file as RSS)
+    user_dataset_dir = os.path.join(RSS_DATASET_BASE_PATH, f"user_{user_id}")
+    os.makedirs(user_dataset_dir, exist_ok=True)
+    dataset_path = os.path.join(user_dataset_dir, "rss_dataset.csv")
+    
+    # Get vector store path for user
+    vector_store_path = get_user_vector_store_path(user_id)
+    
+    # Use RAGService.process_single_url to fetch and process the URL
+    rag_service = RAGService()
+    result = rag_service.process_single_url(
+        user_id=user_id,
+        url=url,
+        dataset_path=dataset_path,
+        vector_store_path=vector_store_path,
+        title=title
+    )
+
+    status_code = 200 if result.get("status") == "success" else 500
+    
+    # Check if vector store was created/updated
+    vector_store_exists = os.path.exists(os.path.join(vector_store_path, "index.faiss"))
+    
+    response = {
+        "message": result.get("message", "URL processing completed"),
+        "status": result.get("status"),
+        "new_count": result.get("new_count", 0),
+        "title": result.get("title", ""),
+        "url": result.get("url", url),
+        "dataset_path": dataset_path,
+        "vector_store_path": vector_store_path,
+        "vector_store_exists": vector_store_exists,
     }
     return JsonResponse(response, status=status_code)
 
