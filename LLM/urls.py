@@ -9,4 +9,5 @@ urlpatterns = [
     path("api/url-upload/", views.upload_single_url, name="url_upload_api"),
     path("api/vector-store/rebuild/", views.vector_store_rebuild_api, name="vector_store_rebuild_api"),
     path("api/vector-stores/list/", views.list_vector_stores_api, name="list_vector_stores_api"),
+    path("api/upload/files/", views.upload_files, name="upload_files_to_vectorstore_api"),
 ]

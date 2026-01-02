@@ -372,23 +372,6 @@
     </div>
   </div>
 
-  {% if llm_available %}
-  <div id="llmResponsePanel" class="hidden">
-    <div class="recorder-section">
-      <h3><i class="fas fa-robot me-2"></i>AI Assistant Response</h3>
-      <div id="llmResponseResult"></div>
-      <div class="button-group" style="margin-top: 15px;">
-        <button type="button" id="askFollowUpBtn" class="recorder-btn primary" onclick="askFollowUp()" style="display: none;">
-          <i class="fas fa-comment me-2"></i>Ask Follow-up Question
-        </button>
-        <button type="button" id="chatWithLLMBtn" class="recorder-btn" onclick="window.location.href='{% url 'rag_chat_page' %}'">
-          <i class="fas fa-comments me-2"></i>Open Chat Interface
-        </button>
-      </div>
-    </div>
-  </div>
-  {% endif %}
-
   <div class="back-btn">
     <a href="{% url 'home' %}" class="btn">
       <i class="fas fa-home me-2"></i>Back to Home
@@ -639,7 +622,8 @@
       },
       body: JSON.stringify({
         message: question,
-        user_id: "{{ user_id|default:'anonymous' }}"
+        user_id: "{{ user_id|default:'anonymous' }}",
+        vector_store_path: vectorStoreSelect.value
       }),
     })
       .then((response) => {

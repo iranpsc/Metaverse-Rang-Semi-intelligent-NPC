@@ -419,6 +419,30 @@
             </form>
             <div class="tool-status" id="rebuild-status"></div>
         </div>
+        <!-- File Upload -->
+        <form id="file-upload-form">
+            <h4>Upload Files to Knowledge Base</h4>
+        
+            <input
+            type="file"
+            id="kb-files"
+            multiple
+            accept=".pdf,.docx,.txt,.csv"
+            required
+            />
+        
+            <input
+            type="text"
+            id="file-user-id"
+            placeholder="User ID"
+            required
+            />
+        
+            <button type="submit">Upload & Index</button>
+        
+            <pre id="file-upload-status"></pre>
+        </form>
+  
     </section>
 {% endblock %}
 
@@ -905,6 +929,84 @@
             urlStatus.textContent = `⚠️ URL upload error: ${error}`;
         }
     });
+
+    const kbFileInput = document.getElementById("kbFileInput");
+    const uploadBtn = document.getElementById("uploadKBFilesBtn");
+    const selectedFilesDiv = document.getElementById("kbSelectedFiles");
+    const statusDiv = document.getElementById("kbUploadStatus");
+
+    function selectKBFiles() {
+    kbFileInput.click();
+    }
+
+    kbFileInput.addEventListener("change", () => {
+    selectedFilesDiv.innerHTML = "";
+    statusDiv.textContent = "";
+
+    if (!kbFileInput.files.length) {
+        uploadBtn.disabled = true;
+        return;
+    }
+
+    uploadBtn.disabled = false;
+
+    const list = document.createElement("ul");
+    list.style.paddingLeft = "20px";
+
+    for (const file of kbFileInput.files) {
+        const li = document.createElement("li");
+        li.textContent = `${file.name} (${(file.size / 1024).toFixed(1)} KB)`;
+        list.appendChild(li);
+    }
+
+    selectedFilesDiv.appendChild(list);
+    });
+
+    async function uploadKBFiles() {
+    if (!kbFileInput.files.length) return;
+
+    const formData = new FormData();
+
+    for (const file of kbFileInput.files) {
+        formData.append("files", file);
+    }
+
+    // Include selected vector store
+    const vectorStorePath = vectorStoreSelect?.value;
+    if (vectorStorePath) {
+        formData.append("vector_store_path", vectorStorePath);
+    }
+
+    uploadBtn.disabled = true;
+    statusDiv.innerHTML = "⏳ Uploading and indexing files...";
+
+    try {
+        const response = await fetch("{% url 'upload_files_to_vectorstore_api' %}", {
+        method: "POST",
+        headers: {
+            "X-CSRFToken": "{{ csrf_token }}"
+        },
+        body: formData
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || data.status === "error") {
+        throw new Error(data.message || "Upload failed");
+        }
+
+        statusDiv.innerHTML = `✅ ${data.message}`;
+        kbFileInput.value = "";
+        selectedFilesDiv.innerHTML = "";
+        uploadBtn.disabled = true;
+
+    } catch (err) {
+        console.error(err);
+        statusDiv.innerHTML = `❌ Error: ${err.message}`;
+        uploadBtn.disabled = false;
+    }
+    }
+
 
     // --- Vector store rebuild ---
     const rebuildForm = document.getElementById("rebuild-form");

@@ -9,6 +9,7 @@ from langchain_ollama import OllamaLLM
 import trafilatura
 from .config import CONFIG
 from .rag_system import RAGSession, VectorStoreManager, MemoryManager, RSSUpdater
+from .utils import extract_text_from_file
 
 class RAGService:
     _instance = None
@@ -225,6 +226,82 @@ class RAGService:
             print(f"ERROR in process_single_url for user {user_id}: {e}")
             traceback.print_exc()
             return {"status": "error", "message": str(e)}
+    
+    def process_user_files(
+        self,
+        user_id: str,
+        file_paths: list,
+        dataset_path: str,
+        vector_store_path: str
+    ) -> dict:
+        """
+        Process uploaded files (PDF, DOCX, TXT, CSV) and add them to user's vector store.
+        """
+
+        if not file_paths:
+            return {"status": "warning", "message": "No files provided."}
+
+        print(f"INFO: Processing {len(file_paths)} files for user {user_id}")
+
+        updater = RSSUpdater(
+            embeddings=self.embeddings,
+            dataset_path=dataset_path,
+            vector_store_path=vector_store_path,
+            user_id=user_id,
+            verbose=True
+        )
+
+        entries = []
+
+        for file_path in file_paths:
+            try:
+                text = extract_text_from_file(file_path)
+
+                if not text.strip():
+                    print(f"WARNING: Empty content in {file_path}")
+                    continue
+
+                filename = os.path.basename(file_path)
+
+                entry = {
+                    "title": filename,
+                    "link": file_path,
+                    "pubDate": datetime.now().isoformat(),
+                    "content": text,
+                    "feed_url": "local_file",
+                    "source_type": "file",
+                    "author": user_id
+                }
+
+                entries.append(entry)
+
+            except Exception as e:
+                print(f"ERROR reading {file_path}: {e}")
+
+        if not entries:
+            return {
+                "status": "warning",
+                "message": "No valid content extracted from files.",
+                "new_count": 0
+            }
+
+        # 1. Save to dataset CSV
+        updater.append_to_dataset(entries)
+
+        # 2. Create documents
+        docs = updater.create_documents(entries)
+
+        # 3. Update vector store
+        updater.vstore_manager.append_documents(docs, vector_store_path)
+
+        print(f"SUCCESS: Added {len(entries)} files to vector store.")
+
+        return {
+            "status": "success",
+            "message": f"Added {len(entries)} files to knowledge base.",
+            "new_count": len(entries)
+        }
+
 
     def clear_user_memory(self, memory_path: str, user_id: str = "system") -> dict:
         try:

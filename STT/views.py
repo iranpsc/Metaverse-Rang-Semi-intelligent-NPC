@@ -211,12 +211,15 @@ def record_audio(request):
                     memory_path = get_user_memory_path_for_llm(user_id)
                     
                     rag_service = RAGService()
-                    llm_response = rag_service.get_answer_for_user(
+                    # Consume the generator and join all chunks into a single string
+                    llm_response_generator = rag_service.get_answer_for_user(
                         user_id=user_id,
                         question=text.strip(),
                         vector_store_path=VECTOR_STORE_PATH,
                         memory_path=memory_path
                     )
+                    # Collect all chunks from the generator into a single string
+                    llm_response = ''.join(llm_response_generator)
                 except Exception as e:
                     print(f"Error processing with LLM: {e}")
                     traceback.print_exc()

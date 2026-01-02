@@ -383,6 +383,66 @@ def upload_single_url(request):
 
 
 @csrf_exempt
+def upload_files(request):
+    """
+    API endpoint to upload files (PDF, DOCX, TXT, CSV) and add them
+    to the user's dataset and vector store.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Only POST allowed"}, status=405)
+
+    user_id = str(request.POST.get("user_id") or get_user_id(request))
+
+    files = request.FILES.getlist("files")
+    if not files:
+        return JsonResponse({"error": "No files uploaded"}, status=400)
+
+    # Build dataset path (same dataset as RSS & URL)
+    user_dataset_dir = os.path.join(RSS_DATASET_BASE_PATH, f"user_{user_id}")
+    os.makedirs(user_dataset_dir, exist_ok=True)
+    dataset_path = os.path.join(user_dataset_dir, "rss_dataset.csv")
+
+    # Vector store path
+    vector_store_path = get_user_vector_store_path(user_id)
+
+    rag_service = RAGService()
+
+    try:
+        result = rag_service.process_uploaded_files(
+            user_id=user_id,
+            files=files,
+            dataset_path=dataset_path,
+            vector_store_path=vector_store_path
+        )
+
+        status_code = 200 if result.get("status") == "success" else 500
+
+        vector_store_exists = os.path.exists(
+            os.path.join(vector_store_path, "index.faiss")
+        )
+
+        response = {
+            "status": result.get("status"),
+            "message": result.get("message", "File processing completed"),
+            "new_count": result.get("new_count", 0),
+            "processed_files": result.get("processed_files", []),
+            "dataset_path": dataset_path,
+            "vector_store_path": vector_store_path,
+            "vector_store_exists": vector_store_exists,
+        }
+
+        return JsonResponse(response, status=status_code)
+
+    except Exception as e:
+        traceback.print_exc()
+        return JsonResponse(
+            {"status": "error", "message": str(e)},
+            status=500
+        )
+
+
+
+@csrf_exempt
 def vector_store_rebuild_api(request):
     if request.method != "POST":
         return JsonResponse({"error": "Only POST allowed"}, status=405)
