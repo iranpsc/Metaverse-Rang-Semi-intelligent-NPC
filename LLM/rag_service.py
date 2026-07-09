@@ -10,6 +10,7 @@ import trafilatura
 from .config import CONFIG
 from .rag_system import RAGSession, VectorStoreManager, MemoryManager, RSSUpdater
 from .utils import extract_text_from_file
+import os
 
 class RAGService:
     _instance = None
