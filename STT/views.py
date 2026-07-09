@@ -54,14 +54,15 @@ def home(request):
 
     # Standard Whisper models that are available
     standard_models = [
-        {'name': 'tiny', 'size': '39 MB', 'description': 'Fastest, least accurate'},
-        {'name': 'base', 'size': '74 MB',
+        {'name': 'tiny', 'parameters': '39 M', 'description': 'Fastest, least accurate'},
+        {'name': 'base', 'parameters': '74 M',
             'description': 'Good balance of speed and accuracy'},
-        {'name': 'small', 'size': '244 MB',
+        {'name': 'small', 'parameters': '244 M',
             'description': 'Better accuracy, slower'},
-        {'name': 'medium', 'size': '1469 MB', 'description': 'High accuracy, slower'},
-        {'name': 'large', 'size': '1550 MB',
+        {'name': 'medium', 'parameters': '769 M', 'description': 'High accuracy, slower'},
+        {'name': 'large', 'parameters': '1550 M',
             'description': 'Best accuracy, slowest'},
+        {'name': 'turbo', 'parameters': '809 M', 'description': 'Hybrid'}
     ]
 
     context = {
@@ -95,10 +96,10 @@ def _resolve_model_key(model_choice):
     if not model_choice:
         # Default to bundled Tiny model if present; otherwise fallback to standard tiny
         bundled_path = os.path.join(
-            os.path.dirname(__file__), "model", "Tiny.pt")
+            os.path.dirname(__file__), "model", "Turbo.pt")
         if os.path.exists(bundled_path):
             return (bundled_path, bundled_path, device)
-        return ("tiny", "tiny", device)
+        return ("turbo", "turbo", device)
 
     # If it's an existing local file, load from path
     if os.path.exists(model_choice):
@@ -285,14 +286,15 @@ def record_audio(request):
 
     # Standard Whisper models that are available
     standard_models = [
-        {'name': 'tiny', 'size': '39 MB', 'description': 'Fastest, least accurate'},
-        {'name': 'base', 'size': '74 MB',
+        {'name': 'tiny', 'parameters': '39 M', 'description': 'Fastest, least accurate'},
+        {'name': 'base', 'parameters': '74 M',
             'description': 'Good balance of speed and accuracy'},
-        {'name': 'small', 'size': '244 MB',
+        {'name': 'small', 'parameters': '244 M',
             'description': 'Better accuracy, slower'},
-        {'name': 'medium', 'size': '1469 MB', 'description': 'High accuracy, slower'},
-        {'name': 'large', 'size': '1550 MB',
+        {'name': 'medium', 'parameters': '769 M', 'description': 'High accuracy, slower'},
+        {'name': 'large', 'parameters': '1550 M',
             'description': 'Best accuracy, slowest'},
+        {'name': 'turbo', 'parameters': '809 M', 'description': 'Hybrid'}
     ]
     
     context = {

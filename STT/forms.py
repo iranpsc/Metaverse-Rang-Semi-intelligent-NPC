@@ -9,6 +9,7 @@ class WhisperTrainingForm(forms.Form):
         ('small', 'Small (openai/whisper-small)'),
         ('medium', 'Medium (openai/whisper-medium)'),
         ('large', 'Large (openai/whisper-large)'),
+        ('turbo', 'Turbo (openai/whisper-turbo)'),
         ('custom', 'Custom Path'),
     ]
 

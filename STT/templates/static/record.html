@@ -382,7 +382,9 @@
 
 {% block extra_js %}
 <script>
-  // Global variables
+  window.__INITIAL_RAG_MESSAGE__ = "{{ initial_message|escapejs }}";
+  window.__INITIAL_VECTOR_STORE__ = "{{ initial_vector_store_path|escapejs }}";
+// Global variables
   let mediaRecorder;
   let audioChunks = [];
   let audioBlob;
@@ -799,5 +801,50 @@
   if (vectorStoreSelect) {
     loadVectorStores();
   }
+
+
+  (function () {
+    const initialMessage = window.__INITIAL_RAG_MESSAGE__;
+    const initialVectorStore = window.__INITIAL_VECTOR_STORE__;
+
+    if (!initialMessage) return;
+
+    console.log("[RAG] Initial transcription detected, auto-filling chat");
+
+    // 🔹 Wait until DOM + vector store list is ready
+    const waitForChatReady = setInterval(() => {
+      const chatInput =
+        document.querySelector("#chat-input") ||
+        document.querySelector("textarea");
+
+      const sendBtn =
+        document.querySelector("#send-btn") ||
+        document.querySelector("button[type='submit']");
+
+      const vectorStoreSelect =
+        document.querySelector("#vector-store-select");
+
+      if (!chatInput || !sendBtn) return;
+
+      // Set vector store if provided
+      if (initialVectorStore && vectorStoreSelect) {
+        vectorStoreSelect.value = initialVectorStore;
+        console.log("[RAG] Vector store set:", initialVectorStore);
+      }
+
+      // Fill message
+      chatInput.value = initialMessage;
+      chatInput.dispatchEvent(new Event("input"));
+
+      // Auto-send after short delay
+      setTimeout(() => {
+        sendBtn.click();
+        console.log("[RAG] Auto-sent transcription to RAG");
+      }, 300);
+
+      clearInterval(waitForChatReady);
+    }, 200);
+  })();
+
 </script>
 {% endblock %}
