@@ -77,7 +77,7 @@ langchain-experimental==0.3.4
 langchain-huggingface==0.3.1
 langchain-ollama==0.3.10
 langchain-text-splitters==0.3.11
-langsmith==0.4.33
+langsmith==0.8.18
 lxml==6.0.2
 lxml_html_clean==0.4.3
 markdown-it-py==4.0.0
