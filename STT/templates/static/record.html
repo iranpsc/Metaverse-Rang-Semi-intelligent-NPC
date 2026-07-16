@@ -415,6 +415,14 @@
 
   // Start recording function
   function startRecording() {
+    // Browsers expose the microphone only in secure contexts (HTTPS or localhost);
+    // on plain HTTP navigator.mediaDevices is undefined and recording cannot work
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      statusEl.textContent =
+        "Error: Microphone requires a secure connection. Open this page over HTTPS: https://" +
+        location.host + location.pathname;
+      return;
+    }
     navigator.mediaDevices
       .getUserMedia({ audio: true })
       .then((stream) => {
