@@ -26,9 +26,15 @@ SECRET_KEY = "django-insecure-!8gw!hh*2$7@)0u&ueyyadgo(r(1skawe%b%-&s7!=@(4$%6a@
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ["npc.irpsc.com", "www.npc.irpsc.com", "localhost", "127.0.0.1"]
+ALLOWED_HOSTS = [
+    "npc.metarang.com", "www.npc.metarang.com",
+    "npc.irpsc.com", "www.npc.irpsc.com",
+    "localhost", "127.0.0.1",
+]
 
 CSRF_TRUSTED_ORIGINS = [
+    'https://npc.metarang.com',
+    'https://www.npc.metarang.com',
     'https://npc.irpsc.com',
     'https://www.npc.irpsc.com',
 ]
@@ -139,6 +145,9 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
+
+# TTS microservice (runs separately in TTS/tts venv, see TTS/start_tts_server.sh)
+TTS_SERVER_URL = os.environ.get("TTS_SERVER_URL", "http://127.0.0.1:5002")
 
 # settings.py
 CELERY_BROKER_URL = 'redis://localhost:6379/0'
