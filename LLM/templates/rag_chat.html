@@ -108,6 +108,25 @@
         transform: none;
     }
 
+    #voice-btn {
+        padding: 10px 14px;
+        border-radius: 6px;
+        border: 1px solid #e0e0e0;
+        background: white;
+        font-size: 1.1rem;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    #voice-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    }
+
+    #voice-btn.muted {
+        opacity: 0.5;
+    }
+
     #status {
         font-size: 0.9rem;
         color: #777;
@@ -349,6 +368,7 @@
                 placeholder="سوال خود را بنویسید و Enter بزنید..."
             />
             <button id="send-btn">ارسال</button>
+            <button id="voice-btn" title="پخش صوتی پاسخ">🔊</button>
         </div>
     </div>
 
@@ -627,7 +647,133 @@
     let currentFirstToken = false;
     let currentRawText = ""; // Store raw text before Markdown conversion
     let currentAbortController = null; // For canceling ongoing requests
-    
+
+    // --- TTS: پخش صوتی جمله‌به‌جمله پاسخ در حین استریم ---
+    const voiceBtn = document.getElementById("voice-btn");
+    let ttsEnabled = localStorage.getItem("ttsEnabled") !== "off";
+    let ttsSentenceBuffer = "";                 // streamed tokens not yet forming a full sentence
+    let ttsPendingChunk = "";                   // completed sentences waiting to reach batch size
+    let ttsFirstChunkSent = false;              // first sentence goes out immediately; later ones are batched
+    let ttsPlaybackQueue = Promise.resolve();   // plays audio clips strictly in order
+    let ttsGeneration = 0;                      // bumped to discard queued audio from a previous message
+    let ttsCurrentAudio = null;
+    const TTS_BATCH_MIN_CHARS = 120;            // after the first sentence, batch this much text per request
+
+    function updateVoiceBtn() {
+        voiceBtn.textContent = ttsEnabled ? "🔊" : "🔇";
+        voiceBtn.classList.toggle("muted", !ttsEnabled);
+        voiceBtn.title = ttsEnabled ? "قطع صدا" : "پخش صوتی پاسخ";
+    }
+    updateVoiceBtn();
+
+    voiceBtn.addEventListener("click", () => {
+        ttsEnabled = !ttsEnabled;
+        localStorage.setItem("ttsEnabled", ttsEnabled ? "on" : "off");
+        if (!ttsEnabled) ttsStopPlayback();
+        updateVoiceBtn();
+    });
+
+    function ttsStopPlayback() {
+        ttsGeneration++;
+        ttsSentenceBuffer = "";
+        ttsPendingChunk = "";
+        ttsFirstChunkSent = false;
+        ttsPlaybackQueue = Promise.resolve();
+        if (ttsCurrentAudio) {
+            ttsCurrentAudio.pause();
+            ttsCurrentAudio = null;
+        }
+    }
+
+    // Strip markdown so symbols aren't read aloud
+    function ttsCleanText(text) {
+        return text
+            .replace(/```[\s\S]*?```/g, " ")
+            .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+            .replace(/[*_#`>|~]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+    }
+
+    function ttsEnqueue(sentence) {
+        if (!ttsEnabled) return;
+        const clean = ttsCleanText(sentence);
+        if (clean.length < 2) return;
+        const gen = ttsGeneration;
+        // Start synthesis right away; the queue only enforces playback order
+        const audioBlobPromise = fetch("{% url 'tts_api' %}", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: clean }),
+        }).then(r => (r.ok ? r.blob() : null)).catch(() => null);
+
+        ttsPlaybackQueue = ttsPlaybackQueue.then(async () => {
+            const blob = await audioBlobPromise;
+            if (!blob || gen !== ttsGeneration || !ttsEnabled) return;
+            await new Promise((resolve) => {
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                ttsCurrentAudio = audio;
+                const finish = () => { URL.revokeObjectURL(url); resolve(); };
+                audio.onended = finish;
+                audio.onerror = finish;
+                audio.play().catch(finish);
+            });
+        });
+    }
+
+    // A terminator ends a sentence — but "." between digits (۳.۵ / 3.5) does not
+    function ttsIsTerminator(ch, next) {
+        if ("!?؟؛…\n".includes(ch)) return true;
+        if (ch === ".") return !(next && /[0-9۰-۹٠-٩]/.test(next));
+        return false;
+    }
+
+    // Index just past the first complete sentence (including trailing terminators), or -1
+    function ttsNextSentenceEnd(text) {
+        for (let i = 0; i < text.length; i++) {
+            if (ttsIsTerminator(text[i], text[i + 1])) {
+                let end = i + 1;
+                while (end < text.length && ttsIsTerminator(text[end], text[end + 1])) end++;
+                return end;
+            }
+        }
+        return -1;
+    }
+
+    // Only speak chunks that contain actual words, not bare list markers like "۱."
+    function ttsSpeakable(text) {
+        return /\p{L}/u.test(text);
+    }
+
+    // Feed streamed tokens. The first complete sentence is synthesized immediately
+    // (fast start); after that, complete sentences accumulate into ~TTS_BATCH_MIN_CHARS
+    // chunks so playback is long, continuous clips instead of choppy fragments.
+    function ttsFeed(token) {
+        if (!ttsEnabled) return;
+        ttsSentenceBuffer += token;
+        let end;
+        while ((end = ttsNextSentenceEnd(ttsSentenceBuffer)) !== -1) {
+            ttsPendingChunk += ttsSentenceBuffer.slice(0, end);
+            ttsSentenceBuffer = ttsSentenceBuffer.slice(end);
+            const clean = ttsCleanText(ttsPendingChunk);
+            const bigEnough = !ttsFirstChunkSent || clean.length >= TTS_BATCH_MIN_CHARS;
+            if (bigEnough && ttsSpeakable(clean)) {
+                ttsEnqueue(ttsPendingChunk);
+                ttsPendingChunk = "";
+                ttsFirstChunkSent = true;
+            }
+        }
+    }
+
+    function ttsFlush() {
+        const rest = ttsPendingChunk + ttsSentenceBuffer;
+        ttsPendingChunk = "";
+        ttsSentenceBuffer = "";
+        ttsFirstChunkSent = false;
+        if (ttsSpeakable(ttsCleanText(rest))) ttsEnqueue(rest);
+    }
+
     /**
      * Parse SSE (Server-Sent Events) data from stream
      * SSE format: "data: {json}\n\n"
@@ -667,7 +813,8 @@
             
             // Append token immediately
             currentRawText += data.token;
-            
+            ttsFeed(data.token);
+
             // Convert raw text to Markdown and update HTML
             currentBotMessage.innerHTML = marked.parse(currentRawText);
             
@@ -676,6 +823,7 @@
             chatBox.scrollTop = chatBox.scrollHeight;
         } else if (data.type === "done") {
             console.log("Stream completed. Total chunks:", data.chunk_count);
+            ttsFlush();
             if (currentThinking && currentThinking.parentNode) {
                 chatBox.removeChild(currentThinking);
             }
@@ -687,6 +835,7 @@
             currentRawText = "";
             currentAbortController = null;
         } else if (data.type === "error") {
+            ttsStopPlayback();
             if (currentThinking && currentThinking.parentNode) {
                 chatBox.removeChild(currentThinking);
             }
@@ -713,6 +862,9 @@
         if (currentAbortController) {
             currentAbortController.abort();
         }
+
+        // Stop any speech left over from the previous answer
+        ttsStopPlayback();
 
         // نمایش پیام کاربر
         addMessage(text, "user");

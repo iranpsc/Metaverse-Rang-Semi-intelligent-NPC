@@ -4,8 +4,9 @@ import os
 from dataclasses import asdict
 from pathlib import Path
 
+import requests
 from django.conf import settings
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 
@@ -246,6 +247,48 @@ def rag_chat_api(request):
     response["Access-Control-Allow-Headers"] = "Content-Type"
     
     return response
+
+
+@csrf_exempt
+def tts_api(request):
+    """
+    Synthesize speech for a piece of text (typically one sentence of an LLM
+    response). Proxies to the TTS microservice (TTS/tts_server.py), which runs
+    in its own venv because Coqui TTS conflicts with this environment's deps.
+    Returns audio/wav.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Only POST allowed"}, status=405)
+
+    try:
+        data = json.loads(request.body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return JsonResponse({"error": "Invalid JSON"}, status=400)
+
+    text = (data.get("text") or "").strip()
+    if not text:
+        return JsonResponse({"error": "text is empty"}, status=400)
+
+    try:
+        tts_response = requests.post(
+            f"{settings.TTS_SERVER_URL}/synthesize",
+            json={"text": text},
+            timeout=(3, 120),
+        )
+    except requests.exceptions.RequestException:
+        return JsonResponse(
+            {"error": "TTS service unavailable. Start it with TTS/start_tts_server.sh"},
+            status=503,
+        )
+
+    if tts_response.status_code != 200:
+        try:
+            detail = tts_response.json().get("error", "synthesis failed")
+        except ValueError:
+            detail = "synthesis failed"
+        return JsonResponse({"error": detail}, status=502)
+
+    return HttpResponse(tts_response.content, content_type="audio/wav")
 
 
 @csrf_exempt
