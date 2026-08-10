@@ -127,6 +127,50 @@
         opacity: 0.5;
     }
 
+    #vc-bar {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        padding: 8px 15px 12px 15px;
+        background: white;
+        font-size: 0.9rem;
+    }
+
+    #vc-toggle-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        color: var(--primary-color);
+        user-select: none;
+    }
+
+    #vc-toggle-label input { cursor: pointer; }
+
+    #vc-sample-select {
+        padding: 6px 10px;
+        border: 1px solid #e0e0e0;
+        border-radius: 6px;
+        background: white;
+        font-size: 0.9rem;
+        max-width: 220px;
+    }
+
+    #vc-sample-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    #vc-manage-link {
+        color: var(--secondary-color);
+        text-decoration: none;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+
+    #vc-manage-link:hover { text-decoration: underline; }
+
+    #vc-info { color: #999; font-size: 0.82rem; }
+
     #status {
         font-size: 0.9rem;
         color: #777;
@@ -369,6 +413,18 @@
             />
             <button id="send-btn">ارسال</button>
             <button id="voice-btn" title="پخش صوتی پاسخ">🔊</button>
+        </div>
+
+        <div id="vc-bar">
+            <label id="vc-toggle-label" title="پاسخ صوتی با صدای انتخاب‌شده خوانده می‌شود">
+                <input type="checkbox" id="vc-enable" />
+                🎭 تبدیل صدا
+            </label>
+            <select id="vc-sample-select" disabled>
+                <option value="">— انتخاب نمونه صدا —</option>
+            </select>
+            <a href="{% url 'voice_samples_page' %}" id="vc-manage-link" title="ضبط و مدیریت نمونه‌های صدا">＋ نمونه صدا</a>
+            <span id="vc-info"></span>
         </div>
     </div>
 
@@ -673,6 +729,88 @@
         updateVoiceBtn();
     });
 
+    // --- Voice Conversion: re-voice the spoken reply to a recorded sample ---
+    const vcEnableEl = document.getElementById("vc-enable");
+    const vcSelectEl = document.getElementById("vc-sample-select");
+    const vcInfoEl = document.getElementById("vc-info");
+    let vcEnabled = localStorage.getItem("vcEnabled") === "on";
+    let vcSampleId = localStorage.getItem("vcSampleId") || "";
+
+    function updateVcUI() {
+        vcEnableEl.checked = vcEnabled;
+        vcSelectEl.disabled = !vcEnabled;
+        if (vcEnabled && !vcSampleId) {
+            vcInfoEl.textContent = "یک نمونه صدا انتخاب کنید";
+        } else if (!vcInfoEl.querySelector("a")) {
+            vcInfoEl.textContent = "";
+        }
+    }
+
+    async function loadVoiceSamples() {
+        try {
+            const res = await fetch("{% url 'voice_samples_api' %}");
+            const data = await res.json();
+            const samples = data.samples || [];
+            vcSelectEl.innerHTML = '<option value="">— انتخاب نمونه صدا —</option>';
+            for (const s of samples) {
+                const opt = document.createElement("option");
+                opt.value = s.id;
+                opt.textContent = s.name;
+                if (String(s.id) === String(vcSampleId)) opt.selected = true;
+                vcSelectEl.appendChild(opt);
+            }
+            // Drop a stored selection that no longer exists.
+            if (vcSampleId && !samples.some(s => String(s.id) === String(vcSampleId))) {
+                vcSampleId = "";
+                localStorage.removeItem("vcSampleId");
+            }
+            if (samples.length === 0) {
+                vcInfoEl.innerHTML = 'نمونه‌ای نیست — <a href="{% url 'voice_samples_page' %}">ضبط کنید</a>';
+            }
+            updateVcUI();
+        } catch (e) {
+            console.error("Failed to load voice samples", e);
+        }
+    }
+
+    vcEnableEl.addEventListener("change", () => {
+        vcEnabled = vcEnableEl.checked;
+        localStorage.setItem("vcEnabled", vcEnabled ? "on" : "off");
+        // Conversion needs audio to transform, so make sure playback (TTS) is on.
+        if (vcEnabled && !ttsEnabled) {
+            ttsEnabled = true;
+            localStorage.setItem("ttsEnabled", "on");
+            updateVoiceBtn();
+        }
+        updateVcUI();
+    });
+
+    vcSelectEl.addEventListener("change", () => {
+        vcSampleId = vcSelectEl.value;
+        if (vcSampleId) localStorage.setItem("vcSampleId", vcSampleId);
+        else localStorage.removeItem("vcSampleId");
+        updateVcUI();
+    });
+
+    // If VC is on with a chosen sample, convert the TTS clip to that voice.
+    // Any failure falls back to the original TTS audio so playback never breaks.
+    async function ttsMaybeConvert(blob) {
+        if (!blob || !vcEnabled || !vcSampleId) return blob;
+        try {
+            const res = await fetch(
+                "{% url 'vc_convert_api' %}?sample_id=" + encodeURIComponent(vcSampleId),
+                { method: "POST", headers: { "Content-Type": "audio/wav" }, body: blob }
+            );
+            if (!res.ok) return blob;
+            return await res.blob();
+        } catch (e) {
+            return blob;
+        }
+    }
+
+    updateVcUI();
+    loadVoiceSamples();
+
     function ttsStopPlayback() {
         ttsGeneration++;
         ttsSentenceBuffer = "";
@@ -705,7 +843,9 @@
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: clean }),
-        }).then(r => (r.ok ? r.blob() : null)).catch(() => null);
+        }).then(r => (r.ok ? r.blob() : null))
+          .then(ttsMaybeConvert)   // re-voice to the selected sample when VC is on
+          .catch(() => null);
 
         ttsPlaybackQueue = ttsPlaybackQueue.then(async () => {
             const blob = await audioBlobPromise;

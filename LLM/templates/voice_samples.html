@@ -1,0 +1,435 @@
+{% extends 'base.html' %}
+
+{% block title %}Voice Samples{% endblock %}
+
+{% block extra_css %}
+<style>
+  :root {
+    --vs-primary: #1a237e;
+    --vs-accent: #2ecc71;
+    --vs-danger: #e74c3c;
+  }
+
+  h1 {
+    color: var(--vs-primary);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+
+  .vs-intro {
+    color: #666;
+    margin-bottom: 24px;
+    max-width: 720px;
+  }
+
+  .vs-card {
+    background: #fff;
+    padding: 26px;
+    border-radius: 12px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+    margin-bottom: 28px;
+  }
+
+  .vs-card h2 {
+    color: var(--vs-primary);
+    font-size: 1.25rem;
+    margin-bottom: 16px;
+    font-weight: 600;
+  }
+
+  .vs-field {
+    margin-bottom: 18px;
+  }
+
+  .vs-field label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+    color: #333;
+  }
+
+  .vs-field input[type="text"] {
+    width: 100%;
+    max-width: 360px;
+    padding: 10px 12px;
+    border: 1px solid #d5d5d5;
+    border-radius: 8px;
+    font-size: 1rem;
+  }
+
+  .vs-hint {
+    background: #f4f6ff;
+    border-left: 4px solid var(--vs-primary);
+    padding: 12px 16px;
+    border-radius: 6px;
+    color: #444;
+    font-size: 0.92rem;
+    margin-bottom: 20px;
+  }
+
+  .vs-buttons {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin: 12px 0;
+  }
+
+  .vs-btn {
+    padding: 12px 20px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1rem;
+    font-weight: 500;
+    color: #fff;
+    background: var(--vs-accent);
+    transition: transform 0.15s, box-shadow 0.15s, background 0.2s;
+    min-width: 150px;
+  }
+
+  .vs-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.18);
+  }
+
+  .vs-btn:disabled {
+    background: #b0b7bd;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+  }
+
+  .vs-btn.danger { background: var(--vs-danger); }
+  .vs-btn.primary { background: var(--vs-primary); }
+  .vs-btn.ghost {
+    background: #fff;
+    color: var(--vs-primary);
+    border: 1px solid var(--vs-primary);
+  }
+
+  .vs-timer {
+    font-family: 'Courier New', monospace;
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: var(--vs-primary);
+    margin: 8px 0;
+  }
+
+  #vs-status {
+    font-weight: 600;
+    padding: 10px 14px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid var(--vs-accent);
+    margin: 14px 0;
+    min-height: 22px;
+  }
+
+  #vs-preview { margin: 16px 0; }
+  #vs-preview audio { width: 100%; max-width: 480px; }
+
+  .vs-hidden { display: none; }
+
+  table.vs-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  table.vs-table th, table.vs-table td {
+    text-align: left;
+    padding: 12px 10px;
+    border-bottom: 1px solid #eee;
+    vertical-align: middle;
+  }
+
+  table.vs-table th {
+    color: #666;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  .vs-name-badge {
+    display: inline-block;
+    background: var(--vs-primary);
+    color: #fff;
+    border-radius: 6px;
+    padding: 4px 10px;
+    font-weight: 600;
+  }
+
+  .vs-empty {
+    color: #888;
+    padding: 20px 0;
+    text-align: center;
+  }
+
+  .vs-recording-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: var(--vs-danger);
+    margin-right: 8px;
+    animation: vs-blink 1s infinite;
+  }
+
+  @keyframes vs-blink { 50% { opacity: 0.3; } }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container" style="max-width: 900px;">
+  <h1><i class="fas fa-user-astronaut me-2"></i>Voice Samples</h1>
+  <p class="vs-intro">
+    Record a short clip of a voice here and give it a label. Saved samples become
+    target voices you can pick in the <a href="{% url 'rag_chat_page' %}">RAG Chat</a>:
+    turn on <strong>Voice Conversion</strong> there and the assistant's spoken replies
+    will be re-voiced to sound like the sample you choose.
+  </p>
+
+  <div class="vs-card">
+    <h2><i class="fas fa-microphone me-2"></i>Record a New Sample</h2>
+
+    <div class="vs-hint">
+      <i class="fas fa-lightbulb me-1"></i>
+      For best results, record <strong>5&ndash;15 seconds</strong> of clear, natural
+      speech in a quiet room &mdash; for example, read a couple of sentences aloud.
+    </div>
+
+    <div class="vs-field">
+      <label for="vs-name">Voice label / initials</label>
+      <input type="text" id="vs-name" maxlength="64" placeholder="e.g. AMN, Sara, My Voice" />
+    </div>
+
+    <div class="vs-buttons">
+      <button id="vs-start" class="vs-btn"><i class="fas fa-play me-2"></i>Start Recording</button>
+      <button id="vs-stop" class="vs-btn danger" disabled><i class="fas fa-stop me-2"></i>Stop</button>
+    </div>
+
+    <div class="vs-timer" id="vs-timer">00:00</div>
+    <div id="vs-status">Ready to record.</div>
+
+    <div id="vs-preview" class="vs-hidden"></div>
+
+    <div class="vs-buttons">
+      <button id="vs-save" class="vs-btn primary" disabled><i class="fas fa-save me-2"></i>Save Sample</button>
+      <button id="vs-reset" class="vs-btn ghost"><i class="fas fa-redo me-2"></i>Discard</button>
+    </div>
+  </div>
+
+  <div class="vs-card">
+    <h2><i class="fas fa-list me-2"></i>Saved Voice Samples</h2>
+    <div id="vs-list-wrap">
+      <table class="vs-table" id="vs-table">
+        <thead>
+          <tr>
+            <th>Label</th>
+            <th>Preview</th>
+            <th>Recorded</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="vs-tbody">
+          <tr><td colspan="4" class="vs-empty">Loading&hellip;</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+  const LIST_URL = "{% url 'voice_samples_api' %}";
+  const CREATE_URL = "{% url 'voice_samples_api' %}";
+  const DELETE_URL = (id) => `/api/voice-samples/${id}/delete/`;
+
+  const nameInput = document.getElementById("vs-name");
+  const startBtn = document.getElementById("vs-start");
+  const stopBtn = document.getElementById("vs-stop");
+  const saveBtn = document.getElementById("vs-save");
+  const resetBtn = document.getElementById("vs-reset");
+  const statusEl = document.getElementById("vs-status");
+  const timerEl = document.getElementById("vs-timer");
+  const previewEl = document.getElementById("vs-preview");
+  const tbody = document.getElementById("vs-tbody");
+
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let recordedBlob = null;
+  let recordedMime = "audio/webm";
+  let startTime = 0;
+  let timerInterval = null;
+
+  function fmt(t) {
+    const s = Math.floor(t / 1000);
+    return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  }
+
+  function tick() { timerEl.textContent = fmt(Date.now() - startTime); }
+
+  function pickMime() {
+    // Prefer formats ffmpeg/librosa decode well on the server side.
+    const prefs = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
+    for (const m of prefs) {
+      if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+    }
+    return "";
+  }
+
+  async function startRecording() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      statusEl.textContent =
+        "Microphone needs a secure connection. Open this page over HTTPS or on localhost.";
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = pickMime();
+      recordedMime = mime || "audio/webm";
+      mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      audioChunks = [];
+      recordedBlob = null;
+
+      mediaRecorder.addEventListener("dataavailable", (e) => {
+        if (e.data && e.data.size > 0) audioChunks.push(e.data);
+      });
+
+      mediaRecorder.addEventListener("stop", () => {
+        stream.getTracks().forEach((t) => t.stop());
+        recordedBlob = new Blob(audioChunks, { type: recordedMime });
+        const url = URL.createObjectURL(recordedBlob);
+        previewEl.innerHTML = "";
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.src = url;
+        previewEl.appendChild(audio);
+        previewEl.classList.remove("vs-hidden");
+        statusEl.innerHTML = "Recording complete. Add a label and save.";
+        saveBtn.disabled = false;
+      });
+
+      mediaRecorder.start();
+      startTime = Date.now();
+      tick();
+      timerInterval = setInterval(tick, 250);
+
+      statusEl.innerHTML = '<span class="vs-recording-dot"></span>Recording&hellip;';
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+      saveBtn.disabled = true;
+      previewEl.classList.add("vs-hidden");
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = "Could not access the microphone. Check browser permissions.";
+    }
+  }
+
+  function stopRecording() {
+    if (!mediaRecorder || mediaRecorder.state === "inactive") return;
+    mediaRecorder.stop();
+    clearInterval(timerInterval);
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+  }
+
+  function resetRecorder() {
+    clearInterval(timerInterval);
+    recordedBlob = null;
+    audioChunks = [];
+    previewEl.innerHTML = "";
+    previewEl.classList.add("vs-hidden");
+    timerEl.textContent = "00:00";
+    statusEl.textContent = "Ready to record.";
+    startBtn.disabled = false;
+    stopBtn.disabled = true;
+    saveBtn.disabled = true;
+  }
+
+  async function saveSample() {
+    const name = nameInput.value.trim();
+    if (!name) { statusEl.textContent = "Please enter a label first."; nameInput.focus(); return; }
+    if (!recordedBlob) { statusEl.textContent = "Record a clip first."; return; }
+
+    const ext = recordedMime.includes("ogg") ? "ogg" : recordedMime.includes("mp4") ? "m4a" : "webm";
+    const form = new FormData();
+    form.append("name", name);
+    form.append("audio", new File([recordedBlob], `sample.${ext}`, { type: recordedMime }));
+
+    saveBtn.disabled = true;
+    statusEl.textContent = "Saving…";
+    try {
+      const res = await fetch(CREATE_URL, { method: "POST", body: form });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "save failed");
+      statusEl.innerHTML = `✅ Saved <strong>${data.sample.name}</strong>.`;
+      nameInput.value = "";
+      resetRecorder();
+      loadSamples();
+    } catch (err) {
+      console.error(err);
+      statusEl.textContent = `Error: ${err.message}`;
+      saveBtn.disabled = false;
+    }
+  }
+
+  async function deleteSample(id, name) {
+    if (!confirm(`Delete voice sample "${name}"?`)) return;
+    try {
+      const res = await fetch(DELETE_URL(id), { method: "POST" });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "delete failed");
+      }
+      loadSamples();
+    } catch (err) {
+      alert(`Error: ${err.message}`);
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, (c) => (
+      { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+    ));
+  }
+
+  async function loadSamples() {
+    try {
+      const res = await fetch(LIST_URL);
+      const data = await res.json();
+      const samples = data.samples || [];
+      if (samples.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="vs-empty">No voice samples yet. Record one above.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = "";
+      for (const s of samples) {
+        const tr = document.createElement("tr");
+        const when = new Date(s.created_at).toLocaleString();
+        tr.innerHTML = `
+          <td><span class="vs-name-badge">${escapeHtml(s.name)}</span></td>
+          <td><audio controls preload="none" src="${s.url}" style="max-width:220px;"></audio></td>
+          <td style="color:#666;">${escapeHtml(when)}</td>
+          <td><button class="vs-btn danger" style="min-width:auto;padding:8px 14px;"
+                data-id="${s.id}" data-name="${escapeHtml(s.name)}">
+              <i class="fas fa-trash"></i></button></td>`;
+        tbody.appendChild(tr);
+      }
+      tbody.querySelectorAll("button[data-id]").forEach((btn) => {
+        btn.addEventListener("click", () => deleteSample(btn.dataset.id, btn.dataset.name));
+      });
+    } catch (err) {
+      console.error(err);
+      tbody.innerHTML = '<tr><td colspan="4" class="vs-empty">Failed to load samples.</td></tr>';
+    }
+  }
+
+  startBtn.addEventListener("click", startRecording);
+  stopBtn.addEventListener("click", stopRecording);
+  saveBtn.addEventListener("click", saveSample);
+  resetBtn.addEventListener("click", resetRecorder);
+
+  loadSamples();
+</script>
+{% endblock %}
