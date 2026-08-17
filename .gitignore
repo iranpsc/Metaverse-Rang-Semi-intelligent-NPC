@@ -1,12 +1,32 @@
-**.pt
-**.png
-.vscode/
-test.ipynb
+# Local configuration and editor state
 .env
+.vscode/
+.claude/
+.agents/
+
+# Python and Django runtime files
+__pycache__/
+*.py[cod]
+.pytest_cache/
 db.sqlite3
-**/__pycache__/
-**/.pytest_cache/
-**/__pycache__/
-**.pyc
-**.webp
 media/
+
+# Local environments and generated service output
+TTS/tts/
+VC/freevc-env/
+VC/outputs/
+*.log
+nohup.out
+
+# Model checkpoints and generated media must be provisioned separately
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.wav
+*.webp
+
+# Local tooling artifacts
+skills-lock.json
+vector_store_path.txt
+test.ipynb

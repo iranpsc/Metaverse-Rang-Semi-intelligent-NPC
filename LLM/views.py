@@ -10,6 +10,7 @@ from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
 from django.views.decorators.csrf import csrf_exempt
 
+from .models import VoiceSample
 from .rag_service import RAGService
 from .rss_ingestor import RSSIngestor, RSS_SCHEMA
 
@@ -547,3 +548,119 @@ def list_vector_stores_api(request):
         "stores": stores,
         "count": len(stores)
     })
+
+
+# ---------------------------------------------------------------------------
+# Voice conversion (FreeVC)
+#
+# Recorded target voices ("voice samples") are stored via the VoiceSample model
+# under media/voice_samples/. The FreeVC microservice (VC/vc_server.py) reads
+# those files by basename and re-voices a source clip (typically the TTS output)
+# in the chosen target voice. These views manage the sample library and proxy
+# conversion requests, mirroring the TTS proxy above.
+# ---------------------------------------------------------------------------
+
+MAX_VOICE_SAMPLE_BYTES = 25 * 1024 * 1024  # 25 MB guard for uploaded recordings
+
+
+def _voice_sample_dict(sample):
+    return {
+        "id": sample.id,
+        "name": sample.name,
+        "filename": sample.filename,
+        "url": sample.audio_file.url if sample.audio_file else "",
+        "created_at": sample.created_at.isoformat(),
+    }
+
+
+def voice_samples_page(request):
+    """Render the page for recording and managing target voice samples."""
+    return render(request, "voice_samples.html", {})
+
+
+@csrf_exempt
+def voice_samples_api(request):
+    """List (GET) or create (POST, multipart) target voice samples."""
+    if request.method == "GET":
+        samples = [_voice_sample_dict(s) for s in VoiceSample.objects.all()]
+        return JsonResponse({"samples": samples, "count": len(samples)})
+
+    if request.method == "POST":
+        name = (request.POST.get("name") or "").strip()
+        audio = request.FILES.get("audio")
+        if not name:
+            return JsonResponse({"error": "name is required"}, status=400)
+        if not audio:
+            return JsonResponse({"error": "audio file is required"}, status=400)
+        if audio.size and audio.size > MAX_VOICE_SAMPLE_BYTES:
+            return JsonResponse({"error": "recording is too large"}, status=400)
+
+        sample = VoiceSample.objects.create(name=name[:64], audio_file=audio)
+        return JsonResponse({"sample": _voice_sample_dict(sample)}, status=201)
+
+    return JsonResponse({"error": "Only GET and POST allowed"}, status=405)
+
+
+@csrf_exempt
+def voice_sample_delete_api(request, sample_id):
+    """Delete a voice sample and its file."""
+    if request.method not in ("POST", "DELETE"):
+        return JsonResponse({"error": "Only POST or DELETE allowed"}, status=405)
+
+    try:
+        sample = VoiceSample.objects.get(pk=sample_id)
+    except VoiceSample.DoesNotExist:
+        return JsonResponse({"error": "voice sample not found"}, status=404)
+
+    # Remove the stored file, then the row.
+    sample.audio_file.delete(save=False)
+    sample.delete()
+    return JsonResponse({"status": "deleted", "id": sample_id})
+
+
+@csrf_exempt
+def vc_convert_api(request):
+    """Convert a source WAV clip to a target voice via the FreeVC microservice.
+
+    Body: raw WAV bytes of the source (e.g. the TTS output).
+    Query: ?sample_id=<id> selecting the target voice sample.
+    Returns audio/wav of the converted clip.
+    """
+    if request.method != "POST":
+        return JsonResponse({"error": "Only POST allowed"}, status=405)
+
+    sample_id = (request.GET.get("sample_id") or "").strip()
+    if not sample_id:
+        return JsonResponse({"error": "sample_id is required"}, status=400)
+
+    try:
+        sample = VoiceSample.objects.get(pk=sample_id)
+    except (VoiceSample.DoesNotExist, ValueError):
+        return JsonResponse({"error": "voice sample not found"}, status=404)
+
+    source_bytes = request.body
+    if not source_bytes:
+        return JsonResponse({"error": "empty source audio"}, status=400)
+
+    try:
+        vc_response = requests.post(
+            f"{settings.VC_SERVER_URL}/convert",
+            params={"target": sample.filename},
+            data=source_bytes,
+            headers={"Content-Type": "audio/wav"},
+            timeout=(3, 120),
+        )
+    except requests.exceptions.RequestException:
+        return JsonResponse(
+            {"error": "Voice conversion service unavailable. Start it with VC/start_vc_server.sh"},
+            status=503,
+        )
+
+    if vc_response.status_code != 200:
+        try:
+            detail = vc_response.json().get("error", "conversion failed")
+        except ValueError:
+            detail = "conversion failed"
+        return JsonResponse({"error": detail}, status=502)
+
+    return HttpResponse(vc_response.content, content_type="audio/wav")

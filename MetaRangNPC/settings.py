@@ -149,6 +149,10 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 # TTS microservice (runs separately in TTS/tts venv, see TTS/start_tts_server.sh)
 TTS_SERVER_URL = os.environ.get("TTS_SERVER_URL", "http://127.0.0.1:5002")
 
+# Voice-conversion microservice (FreeVC, runs separately in VC/freevc-env venv,
+# see VC/start_vc_server.sh)
+VC_SERVER_URL = os.environ.get("VC_SERVER_URL", "http://127.0.0.1:5003")
+
 # settings.py
 CELERY_BROKER_URL = 'redis://localhost:6379/0'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
