@@ -532,6 +532,10 @@ def vector_store_rebuild_api(request):
     if not vector_store_target:
         return JsonResponse({"error": "vector_store_path is required"}, status=400)
 
+    dataset_input_path = Path(dataset_path)
+    if dataset_input_path.is_absolute() or ".." in dataset_input_path.parts:
+        return JsonResponse({"error": "Invalid dataset_path"}, status=400)
+
     try:
         dataset_abs_path = _resolve_and_validate_path(
             Path(RSS_DATASET_BASE_PATH),
