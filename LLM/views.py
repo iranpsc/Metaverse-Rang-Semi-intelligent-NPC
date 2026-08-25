@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -54,9 +55,15 @@ def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_memory_dir, exist_ok=True)
-    return user_memory_dir
+    safe_user_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(user_id))
+    base_path = Path(MEMORY_BASE_PATH).resolve()
+    user_memory_dir = (base_path / f"user_{safe_user_id}").resolve()
+    try:
+        user_memory_dir.relative_to(base_path)
+    except ValueError:
+        raise ValueError("Invalid user_id for memory path")
+    user_memory_dir.mkdir(parents=True, exist_ok=True)
+    return str(user_memory_dir)
 
 
 def get_user_vector_store_path(user_id: str) -> str:
