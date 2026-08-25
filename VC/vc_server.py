@@ -24,6 +24,7 @@ import io
 import json
 import logging
 import os
+import re
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -97,6 +98,7 @@ INFER_LOCK = threading.Lock()
 # Cache the (expensive) target voice representation per sample file. Keyed by
 # filename + mtime so re-recording under the same name invalidates the cache.
 _target_cache = {}
+_SAFE_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]+\.wav$")
 
 
 def _resolve_sample(filename):
@@ -109,6 +111,10 @@ def _resolve_sample(filename):
     if os.path.isabs(name) or os.path.basename(name) != name:
         raise FileNotFoundError(f"invalid target filename: {name}")
 
+    # Restrict to expected sample filename shape.
+    if not _SAFE_TARGET_RE.fullmatch(name):
+        raise FileNotFoundError(f"invalid target filename: {name}")
+
     samples_root = os.path.realpath(SAMPLES_DIR)
     path = os.path.realpath(os.path.join(samples_root, name))
 
@@ -119,14 +125,6 @@ def _resolve_sample(filename):
     if not os.path.isfile(path):
         raise FileNotFoundError(f"target not found: {name}")
 
-    return path, name
-    """Map an untrusted filename to a real file under SAMPLES_DIR (no traversal)."""
-    name = os.path.basename((filename or "").strip())
-    if not name:
-        raise FileNotFoundError("empty target filename")
-    path = os.path.join(SAMPLES_DIR, name)
-    if not os.path.isfile(path):
-        raise FileNotFoundError(f"voice sample not found: {name}")
     return path, name
 
 
