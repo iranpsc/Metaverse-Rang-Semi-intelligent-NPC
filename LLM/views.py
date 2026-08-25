@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -59,8 +60,21 @@ def get_user_memory_path(user_id):
     return user_memory_dir
 
 
+def _sanitize_user_id(user_id: str) -> str:
+    user_id = str(user_id or "").strip()
+    if not user_id or not re.fullmatch(r"[A-Za-z0-9_-]+", user_id):
+        raise ValueError("Invalid user_id")
+    return user_id
+
+
 def get_user_vector_store_path(user_id: str) -> str:
-    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{user_id}", "rss_store")
+    safe_user_id = _sanitize_user_id(user_id)
+    base_dir = os.path.realpath(VECTOR_STORE_BASE_PATH)
+    user_store_dir = os.path.realpath(
+        os.path.join(base_dir, f"user_{safe_user_id}", "rss_store")
+    )
+    if os.path.commonpath([base_dir, user_store_dir]) != base_dir:
+        raise ValueError("Invalid vector store path")
     os.makedirs(user_store_dir, exist_ok=True)
     return user_store_dir
 
@@ -302,8 +316,11 @@ def upload_rss_feed(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON payload"}, status=400)
 
-    user_id = str(data.get("user_id") or get_user_id(request))
-    
+    try:
+        user_id = _sanitize_user_id(data.get("user_id") or get_user_id(request))
+    except ValueError:
+        return JsonResponse({"error": "Invalid user_id"}, status=400)
+
     # Support both single feed_url (backward compatibility) and rss_links (list)
     feed_url = data.get("feed_url")
     rss_links = data.get("rss_links")
