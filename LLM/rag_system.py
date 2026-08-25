@@ -104,10 +104,21 @@ class MemoryManager:
 
     def _log(self, message: str):
         if self.verbose: print(f"[MemoryManager][{self.user_id}] {message}")
+
+    def _resolve_safe_memory_path(self, memory_path: str) -> Path:
+        base_dir = self.config.get("MEMORY_BASE_PATH")
+        candidate = Path(memory_path).resolve()
+        if base_dir:
+            base_path = Path(base_dir).resolve()
+            try:
+                candidate.relative_to(base_path)
+            except ValueError:
+                raise ValueError("Invalid memory path.")
+        return candidate
         
     def clear(self, memory_path: str) -> Dict:
         try:
-            mem_path = Path(memory_path)
+            mem_path = self._resolve_safe_memory_path(memory_path)
             if mem_path.exists():
                 shutil.rmtree(mem_path)
             mem_path.mkdir(parents=True, exist_ok=True)
@@ -116,7 +127,12 @@ class MemoryManager:
             return {"status": "error", "message": str(e)}
 
     def get_context(self, memory_path: str) -> str:
-        history_file = Path(memory_path) / "conversation_history.json"
+        try:
+            safe_memory_path = self._resolve_safe_memory_path(memory_path)
+        except Exception:
+            return "خطا در خواندن تاریخچه."
+
+        history_file = safe_memory_path / "conversation_history.json"
         if not history_file.exists():
             return "هیچ تاریخچه مکالمه‌ای وجود ندارد."
         try:
@@ -129,7 +145,8 @@ class MemoryManager:
             return "خطا در خواندن تاریخچه."
 
     def add_interaction(self, memory_path: str, question: str, answer: str):
-        history_file = Path(memory_path) / "conversation_history.json"
+        safe_memory_path = self._resolve_safe_memory_path(memory_path)
+        history_file = safe_memory_path / "conversation_history.json"
         history = []
         if history_file.exists():
             try:
@@ -142,7 +159,7 @@ class MemoryManager:
         if len(history) > 50: history = history[-50:]
             
         try:
-            Path(memory_path).mkdir(parents=True, exist_ok=True)
+            safe_memory_path.mkdir(parents=True, exist_ok=True)
             with open(history_file, 'w', encoding='utf-8') as f:
                 json.dump(history, f, ensure_ascii=False, indent=2)
         except Exception as e:
