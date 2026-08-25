@@ -160,7 +160,8 @@ def rag_chat_api(request):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     question = (data.get("message") or "").strip()
-    user_id = str(data.get("user_id") or get_user_id(request)).strip()
+    # Use only trusted server-side identity for per-user filesystem paths.
+    user_id = get_user_id(request).strip()
     
     # Allow explicit vector_store_path selection, otherwise use default resolution
     vector_store_path = data.get("vector_store_path", "").strip()
