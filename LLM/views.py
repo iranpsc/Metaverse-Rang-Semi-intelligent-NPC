@@ -54,9 +54,22 @@ def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_memory_dir, exist_ok=True)
-    return user_memory_dir
+    # Keep only safe filename/path-segment characters to prevent traversal tricks.
+    safe_user_id = "".join(ch for ch in str(user_id) if ch.isalnum() or ch in ("_", "-"))
+    if not safe_user_id:
+        safe_user_id = "anonymous"
+
+    base_path = Path(MEMORY_BASE_PATH).resolve()
+    user_memory_path = (base_path / f"user_{safe_user_id}").resolve()
+
+    # Ensure final path is contained within MEMORY_BASE_PATH.
+    try:
+        user_memory_path.relative_to(base_path)
+    except ValueError:
+        raise ValueError("Invalid user memory path")
+
+    user_memory_path.mkdir(parents=True, exist_ok=True)
+    return str(user_memory_path)
 
 
 def get_user_vector_store_path(user_id: str) -> str:
