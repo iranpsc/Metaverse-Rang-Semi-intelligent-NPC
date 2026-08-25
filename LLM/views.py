@@ -480,7 +480,7 @@ def upload_files(request):
     except Exception as e:
         traceback.print_exc()
         return JsonResponse(
-            {"status": "error", "message": str(e)},
+            {"status": "error", "message": "An internal error has occurred."},
             status=500
         )
 
