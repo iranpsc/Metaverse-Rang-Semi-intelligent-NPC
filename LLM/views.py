@@ -154,15 +154,22 @@ def rag_chat_api(request):
     if not vector_store_path:
         vector_store_path = resolve_vector_store_path(user_id)
     else:
-        # Validate that the provided path exists and has an index
-        if not os.path.isabs(vector_store_path):
-            # If relative, assume it's relative to VECTOR_STORE_BASE_PATH
-            vector_store_path = os.path.join(VECTOR_STORE_BASE_PATH, vector_store_path)
-        
-        # Normalize the path to handle any path issues
-        vector_store_path = os.path.normpath(vector_store_path)
-        
-        index_file = os.path.join(vector_store_path, "index.faiss")
+        # Validate and constrain the provided path to VECTOR_STORE_BASE_PATH
+        base_path = Path(VECTOR_STORE_BASE_PATH).resolve()
+        candidate_path = Path(vector_store_path)
+        if not candidate_path.is_absolute():
+            candidate_path = base_path / candidate_path
+
+        candidate_path = candidate_path.resolve()
+        try:
+            candidate_path.relative_to(base_path)
+        except ValueError:
+            return JsonResponse({
+                "error": "Invalid vector_store_path"
+            }, status=400)
+
+        vector_store_path = str(candidate_path)
+        index_file = str(candidate_path / "index.faiss")
         if not os.path.exists(index_file):
             return JsonResponse({
                 "error": f"Vector store not found at {vector_store_path}. Index file missing: {index_file}"
