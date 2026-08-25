@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -292,6 +293,14 @@ def tts_api(request):
     return HttpResponse(tts_response.content, content_type="audio/wav")
 
 
+def _sanitize_user_id_for_path(user_id: str) -> str:
+    """
+    Restrict user_id to a safe filesystem path segment.
+    Keeps only alphanumeric, underscore and dash characters.
+    """
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", str(user_id))
+    return sanitized or "anonymous"
+
 @csrf_exempt
 def upload_rss_feed(request):
     if request.method != "POST":
@@ -302,7 +311,8 @@ def upload_rss_feed(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON payload"}, status=400)
 
-    user_id = str(data.get("user_id") or get_user_id(request))
+    raw_user_id = str(data.get("user_id") or get_user_id(request))
+    user_id = _sanitize_user_id_for_path(raw_user_id)
     
     # Support both single feed_url (backward compatibility) and rss_links (list)
     feed_url = data.get("feed_url")
@@ -379,7 +389,8 @@ def upload_single_url(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON payload"}, status=400)
 
-    user_id = str(data.get("user_id") or get_user_id(request))
+    raw_user_id = str(data.get("user_id") or get_user_id(request))
+    user_id = _sanitize_user_id_for_path(raw_user_id)
     url = data.get("url", "").strip()
     title = data.get("title", "").strip() or None  # Optional title
     
