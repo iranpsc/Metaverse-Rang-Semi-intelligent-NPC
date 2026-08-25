@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -50,17 +51,28 @@ def get_user_id(request):
     return str(request.session['user_id'])
 
 
+def sanitize_user_id_for_path(user_id: str) -> str:
+    """
+    Convert user-provided IDs to a safe path fragment.
+    Allows only letters, numbers, underscore, and dash.
+    """
+    safe_user_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(user_id))
+    return safe_user_id or "anonymous"
+
+
 def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
+    safe_user_id = sanitize_user_id_for_path(user_id)
+    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{safe_user_id}")
     os.makedirs(user_memory_dir, exist_ok=True)
     return user_memory_dir
 
 
 def get_user_vector_store_path(user_id: str) -> str:
-    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{user_id}", "rss_store")
+    safe_user_id = sanitize_user_id_for_path(user_id)
+    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{safe_user_id}", "rss_store")
     os.makedirs(user_store_dir, exist_ok=True)
     return user_store_dir
 
