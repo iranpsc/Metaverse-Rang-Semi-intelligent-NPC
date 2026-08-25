@@ -256,7 +256,7 @@ def record_audio(request):
 
             return JsonResponse({
                 'status': 'error',
-                'message': str(e)
+                'message': 'An internal error occurred. Please try again later.'
             }, status=500)
 
     # GET: show recorder; carry through selected model from query param if present
