@@ -53,10 +53,17 @@ def get_user_id(request):
 def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
+    Ensures the resolved path stays داخل MEMORY_BASE_PATH.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_memory_dir, exist_ok=True)
-    return user_memory_dir
+    base_dir = os.path.realpath(MEMORY_BASE_PATH)
+    candidate_dir = os.path.realpath(os.path.join(base_dir, f"user_{user_id}"))
+
+    # Prevent path traversal / absolute-path escape
+    if os.path.commonpath([base_dir, candidate_dir]) != base_dir:
+        raise ValueError("Invalid user_id path")
+
+    os.makedirs(candidate_dir, exist_ok=True)
+    return candidate_dir
 
 
 def get_user_vector_store_path(user_id: str) -> str:
@@ -171,7 +178,11 @@ def rag_chat_api(request):
     if not question:
         return JsonResponse({"error": "Message is empty"}, status=400)
 
-    memory_path = get_user_memory_path(user_id)
+    try:
+        memory_path = get_user_memory_path(user_id)
+    except ValueError:
+        return JsonResponse({"error": "Invalid user_id"}, status=400)
+
     rag_service = RAGService()
 
     def event_stream():
