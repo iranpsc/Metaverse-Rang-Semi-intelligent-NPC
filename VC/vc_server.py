@@ -100,6 +100,26 @@ _target_cache = {}
 
 
 def _resolve_sample(filename):
+    """Resolve a target sample filename safely inside SAMPLES_DIR."""
+    name = (filename or "").strip()
+    if not name:
+        raise FileNotFoundError("empty target filename")
+
+    # Disallow absolute paths and directory components.
+    if os.path.isabs(name) or os.path.basename(name) != name:
+        raise FileNotFoundError(f"invalid target filename: {name}")
+
+    samples_root = os.path.realpath(SAMPLES_DIR)
+    path = os.path.realpath(os.path.join(samples_root, name))
+
+    # Ensure the final path is contained within SAMPLES_DIR.
+    if os.path.commonpath([samples_root, path]) != samples_root:
+        raise FileNotFoundError(f"invalid target filename: {name}")
+
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"target not found: {name}")
+
+    return path, name
     """Map an untrusted filename to a real file under SAMPLES_DIR (no traversal)."""
     name = os.path.basename((filename or "").strip())
     if not name:
