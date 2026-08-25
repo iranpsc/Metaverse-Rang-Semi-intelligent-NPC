@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -55,6 +56,10 @@ def get_user_memory_path(user_id):
     Get user-specific memory path.
     Ensures the resolved path stays داخل MEMORY_BASE_PATH.
     """
+    user_id = str(user_id).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", user_id):
+        raise ValueError("Invalid user_id")
+
     base_path = Path(MEMORY_BASE_PATH).resolve()
     candidate_path = (base_path / f"user_{user_id}").resolve(strict=False)
 
