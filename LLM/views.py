@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -50,17 +51,32 @@ def get_user_id(request):
     return str(request.session['user_id'])
 
 
+def _build_safe_user_dir(base_path: str, user_id: str, *suffix_parts: str) -> str:
+    """
+    Build a user-scoped directory path safely under base_path.
+    """
+    safe_user_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(user_id))
+    candidate_path = os.path.join(base_path, f"user_{safe_user_id}", *suffix_parts)
+
+    real_base = os.path.realpath(base_path)
+    real_candidate = os.path.realpath(candidate_path)
+    if os.path.commonpath([real_base, real_candidate]) != real_base:
+        raise ValueError("Invalid user path")
+
+    return real_candidate
+
+
 def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
+    user_memory_dir = _build_safe_user_dir(MEMORY_BASE_PATH, user_id)
     os.makedirs(user_memory_dir, exist_ok=True)
     return user_memory_dir
 
 
 def get_user_vector_store_path(user_id: str) -> str:
-    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{user_id}", "rss_store")
+    user_store_dir = _build_safe_user_dir(VECTOR_STORE_BASE_PATH, user_id, "rss_store")
     os.makedirs(user_store_dir, exist_ok=True)
     return user_store_dir
 
