@@ -214,7 +214,7 @@ def rag_chat_api(request):
                 sys.stdout.flush()
             
             # Send completion signal
-            done_msg = f"data: {json.dumps({'type': 'done', 'user_id': user_id, 'chunk_count': chunk_count}, ensure_ascii=False)}\n\n"
+            done_msg = f"data: {json.dumps({'type': 'done', 'chunk_count': chunk_count}, ensure_ascii=False)}\n\n"
             yield done_msg
             sys.stdout.flush()
             
