@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -54,7 +55,13 @@ def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
+    safe_user_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(user_id))
+    base_dir = os.path.abspath(MEMORY_BASE_PATH)
+    user_memory_dir = os.path.abspath(os.path.join(base_dir, f"user_{safe_user_id}"))
+
+    if not (user_memory_dir == base_dir or user_memory_dir.startswith(base_dir + os.sep)):
+        raise ValueError("Invalid user memory path")
+
     os.makedirs(user_memory_dir, exist_ok=True)
     return user_memory_dir
 
