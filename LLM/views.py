@@ -156,11 +156,26 @@ def rag_chat_api(request):
     else:
         # Validate and constrain the provided path to VECTOR_STORE_BASE_PATH
         base_path = Path(VECTOR_STORE_BASE_PATH).resolve()
-        candidate_path = Path(vector_store_path)
-        if not candidate_path.is_absolute():
-            candidate_path = base_path / candidate_path
+        user_path = Path(vector_store_path)
 
-        candidate_path = candidate_path.resolve()
+        # Only allow relative paths under the trusted base directory
+        if user_path.is_absolute():
+            return JsonResponse({
+                "error": "Invalid vector_store_path"
+            }, status=400)
+
+        normalized_rel = os.path.normpath(str(user_path))
+        if (
+            normalized_rel in ("", ".")
+            or os.path.isabs(normalized_rel)
+            or normalized_rel.startswith("..")
+            or normalized_rel.startswith(f"..{os.sep}")
+        ):
+            return JsonResponse({
+                "error": "Invalid vector_store_path"
+            }, status=400)
+
+        candidate_path = (base_path / normalized_rel).resolve()
         try:
             candidate_path.relative_to(base_path)
         except ValueError:
