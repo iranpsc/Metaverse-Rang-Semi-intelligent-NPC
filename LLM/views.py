@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -17,6 +18,15 @@ from .rss_ingestor import RSSIngestor, RSS_SCHEMA
 
 # تنظیم مسیرهای وکتوراستور و مموری
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+def _sanitize_user_id(raw_user_id):
+    user_id = str(raw_user_id or "").strip()
+    if not user_id:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", user_id):
+        return None
+    return user_id
 DATA_BASE_PATH = os.path.join(BASE_DIR, "data")
 VECTOR_STORE_PATH = os.path.join(DATA_BASE_PATH, "vectorstores/main_store")
 VECTOR_STORE_BASE_PATH = os.path.join(DATA_BASE_PATH, "vectorstores")
@@ -302,7 +312,9 @@ def upload_rss_feed(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON payload"}, status=400)
 
-    user_id = str(data.get("user_id") or get_user_id(request))
+    user_id = _sanitize_user_id(data.get("user_id") or get_user_id(request))
+    if not user_id:
+        return JsonResponse({"error": "Invalid user_id"}, status=400)
     
     # Support both single feed_url (backward compatibility) and rss_links (list)
     feed_url = data.get("feed_url")
@@ -379,7 +391,9 @@ def upload_single_url(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON payload"}, status=400)
 
-    user_id = str(data.get("user_id") or get_user_id(request))
+    user_id = _sanitize_user_id(data.get("user_id") or get_user_id(request))
+    if not user_id:
+        return JsonResponse({"error": "Invalid user_id"}, status=400)
     url = data.get("url", "").strip()
     title = data.get("title", "").strip() or None  # Optional title
     
