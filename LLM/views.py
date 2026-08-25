@@ -524,13 +524,17 @@ def vector_store_rebuild_api(request):
         return JsonResponse({"error": "Invalid JSON payload"}, status=400)
 
     dataset_path = (data.get("dataset_path") or "").strip()
-    vector_store_target = (data.get("vector_store_path") or "").strip()
     user_id = str(data.get("user_id") or "system")
 
     if not dataset_path:
         return JsonResponse({"error": "dataset_path is required"}, status=400)
-    if not vector_store_target:
-        return JsonResponse({"error": "vector_store_path is required"}, status=400)
+
+    # Do not trust client-provided vector_store_path for filesystem writes.
+    # Build it server-side from user_id.
+    vector_store_target = os.path.relpath(
+        get_user_vector_store_path(user_id),
+        VECTOR_STORE_BASE_PATH,
+    )
 
     dataset_input_path = Path(dataset_path)
     if dataset_input_path.is_absolute() or ".." in dataset_input_path.parts:
@@ -542,7 +546,11 @@ def vector_store_rebuild_api(request):
             dataset_path,
             allow_absolute=False,
         )
-        vector_store_abs_path = _resolve_and_validate_path(Path(VECTOR_STORE_BASE_PATH), vector_store_target, allow_absolute=False)
+        vector_store_abs_path = _resolve_and_validate_path(
+            Path(VECTOR_STORE_BASE_PATH),
+            vector_store_target,
+            allow_absolute=False,
+        )
     except ValueError as e:
         logger.warning("Invalid path input in vector_store_rebuild_api: %s", e)
         return JsonResponse({"error": "Invalid path input"}, status=400)
@@ -561,8 +569,8 @@ def vector_store_rebuild_api(request):
     status_code = 200 if result.get("status") == "success" else 500
     return JsonResponse(
         {
-            "dataset_path": dataset_abs_path,
-            "vector_store_path": vector_store_abs_path,
+            "dataset_path": str(dataset_abs_path),
+            "vector_store_path": str(vector_store_abs_path),
             "user_id": user_id,
             "result": result,
         },
