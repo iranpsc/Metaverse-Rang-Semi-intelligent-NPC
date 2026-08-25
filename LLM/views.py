@@ -1,5 +1,6 @@
 # views.py
 import json
+import logging
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -14,6 +15,8 @@ from .models import VoiceSample
 from .rag_service import RAGService
 from .rss_ingestor import RSSIngestor, RSS_SCHEMA
 
+
+logger = logging.getLogger(__name__)
 
 # تنظیم مسیرهای وکتوراستور و مموری
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -528,7 +531,8 @@ def vector_store_rebuild_api(request):
         dataset_abs_path = _resolve_under_base(str(BASE_DIR), dataset_path)
         vector_store_abs_path = _resolve_under_base(str(VECTOR_STORE_BASE_PATH), vector_store_target)
     except ValueError as e:
-        return JsonResponse({"error": str(e)}, status=400)
+        logger.warning("Invalid path input in vector_store_rebuild_api", exc_info=True)
+        return JsonResponse({"error": "Invalid path input"}, status=400)
 
     if not os.path.exists(dataset_abs_path):
         return JsonResponse({"error": f"Dataset not found at {dataset_abs_path}"}, status=404)
