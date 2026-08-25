@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -435,14 +436,26 @@ def upload_files(request):
     if request.method != "POST":
         return JsonResponse({"error": "Only POST allowed"}, status=405)
 
-    user_id = str(request.POST.get("user_id") or get_user_id(request))
+    raw_user_id = str(request.POST.get("user_id") or get_user_id(request))
+    safe_user_id = re.sub(r"[^A-Za-z0-9_-]", "_", raw_user_id).strip("_")
+    if not safe_user_id:
+        return JsonResponse({"error": "Invalid user_id"}, status=400)
+    user_id = safe_user_id
 
     files = request.FILES.getlist("files")
     if not files:
         return JsonResponse({"error": "No files uploaded"}, status=400)
 
     # Build dataset path (same dataset as RSS & URL)
-    user_dataset_dir = os.path.join(RSS_DATASET_BASE_PATH, f"user_{user_id}")
+    base_dataset_dir = os.path.abspath(RSS_DATASET_BASE_PATH)
+    user_dataset_dir = os.path.abspath(
+        os.path.join(base_dataset_dir, f"user_{user_id}")
+    )
+    if not (
+        user_dataset_dir == base_dataset_dir
+        or user_dataset_dir.startswith(base_dataset_dir + os.sep)
+    ):
+        return JsonResponse({"error": "Invalid dataset path"}, status=400)
     os.makedirs(user_dataset_dir, exist_ok=True)
     dataset_path = os.path.join(user_dataset_dir, "rss_dataset.csv")
 
