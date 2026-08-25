@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -50,23 +51,34 @@ def get_user_id(request):
     return str(request.session['user_id'])
 
 
+def _sanitize_user_id(user_id: str) -> str:
+    """
+    Restrict user_id to a filesystem-safe identifier.
+    """
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "", str(user_id or "").strip())
+    return sanitized or "anonymous"
+
+
 def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
+    safe_user_id = _sanitize_user_id(user_id)
+    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{safe_user_id}")
     os.makedirs(user_memory_dir, exist_ok=True)
     return user_memory_dir
 
 
 def get_user_vector_store_path(user_id: str) -> str:
-    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{user_id}", "rss_store")
+    safe_user_id = _sanitize_user_id(user_id)
+    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{safe_user_id}", "rss_store")
     os.makedirs(user_store_dir, exist_ok=True)
     return user_store_dir
 
 
 def resolve_vector_store_path(user_id: str) -> str:
-    user_store_dir = get_user_vector_store_path(user_id)
+    safe_user_id = _sanitize_user_id(user_id)
+    user_store_dir = get_user_vector_store_path(safe_user_id)
     index_file = os.path.join(user_store_dir, "index.faiss")
     if os.path.exists(index_file):
         return user_store_dir
@@ -159,7 +171,7 @@ def rag_chat_api(request):
         return JsonResponse({"error": "Invalid JSON"}, status=400)
 
     question = (data.get("message") or "").strip()
-    user_id = str(data.get("user_id") or get_user_id(request)).strip()
+    user_id = _sanitize_user_id(data.get("user_id") or get_user_id(request))
     
     # Allow explicit vector_store_path selection, otherwise use default resolution
     vector_store_path = data.get("vector_store_path", "").strip()
