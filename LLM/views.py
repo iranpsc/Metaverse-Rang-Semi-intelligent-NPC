@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -303,6 +304,9 @@ def upload_rss_feed(request):
         return JsonResponse({"error": "Invalid JSON payload"}, status=400)
 
     user_id = str(data.get("user_id") or get_user_id(request))
+    safe_user_id = re.sub(r"[^A-Za-z0-9_-]", "_", user_id).strip("_")
+    if not safe_user_id:
+        return JsonResponse({"error": "Invalid user_id"}, status=400)
     
     # Support both single feed_url (backward compatibility) and rss_links (list)
     feed_url = data.get("feed_url")
@@ -325,7 +329,10 @@ def upload_rss_feed(request):
         return JsonResponse({"error": "No valid RSS links provided"}, status=400)
 
     # Build dataset path for user (single CSV file per user)
-    user_dataset_dir = os.path.join(RSS_DATASET_BASE_PATH, f"user_{user_id}")
+    base_dataset_dir = os.path.realpath(RSS_DATASET_BASE_PATH)
+    user_dataset_dir = os.path.realpath(os.path.join(base_dataset_dir, f"user_{safe_user_id}"))
+    if os.path.commonpath([base_dataset_dir, user_dataset_dir]) != base_dataset_dir:
+        return JsonResponse({"error": "Invalid dataset path"}, status=400)
     os.makedirs(user_dataset_dir, exist_ok=True)
     dataset_path = os.path.join(user_dataset_dir, "rss_dataset.csv")
     
