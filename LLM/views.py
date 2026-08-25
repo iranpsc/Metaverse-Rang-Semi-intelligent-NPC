@@ -53,10 +53,16 @@ def get_user_id(request):
 def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
+    Ensures the resolved path stays داخل MEMORY_BASE_PATH.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_memory_dir, exist_ok=True)
-    return user_memory_dir
+    base_path = Path(MEMORY_BASE_PATH).resolve()
+    candidate_path = (base_path / f"user_{user_id}").resolve(strict=False)
+
+    if candidate_path != base_path and base_path not in candidate_path.parents:
+        raise ValueError("Invalid user_id path")
+
+    os.makedirs(candidate_path, exist_ok=True)
+    return str(candidate_path)
 
 
 def get_user_vector_store_path(user_id: str) -> str:
@@ -148,6 +154,10 @@ def rag_chat_api(request):
 
     question = (data.get("message") or "").strip()
     user_id = str(data.get("user_id") or get_user_id(request)).strip()
+    try:
+        memory_path = get_user_memory_path(user_id)
+    except ValueError:
+        return JsonResponse({"error": "Invalid user_id"}, status=400)
     
     # Allow explicit vector_store_path selection, otherwise use default resolution
     vector_store_path = data.get("vector_store_path", "").strip()
@@ -171,7 +181,6 @@ def rag_chat_api(request):
     if not question:
         return JsonResponse({"error": "Message is empty"}, status=400)
 
-    memory_path = get_user_memory_path(user_id)
     rag_service = RAGService()
 
     def event_stream():
