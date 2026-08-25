@@ -5,6 +5,9 @@ on:
   issues:
     types: [opened]
 
+permissions:
+  contents: read
+
 jobs:
   ai-review:
     runs-on: ubuntu-latest
