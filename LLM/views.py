@@ -73,6 +73,18 @@ def resolve_vector_store_path(user_id: str) -> str:
     return VECTOR_STORE_PATH
 
 
+def _is_safe_vector_store_path(path_value: str) -> bool:
+    """
+    Ensure vector store path is inside VECTOR_STORE_BASE_PATH after canonicalization.
+    """
+    try:
+        base_dir = Path(VECTOR_STORE_BASE_PATH).resolve()
+        candidate = Path(path_value).resolve()
+        return candidate == base_dir or base_dir in candidate.parents
+    except Exception:
+        return False
+
+
 def list_available_vector_stores():
     """
     Scan the vectorstores directory and return a list of available vector stores.
@@ -153,15 +165,19 @@ def rag_chat_api(request):
     vector_store_path = data.get("vector_store_path", "").strip()
     if not vector_store_path:
         vector_store_path = resolve_vector_store_path(user_id)
+        if not _is_safe_vector_store_path(vector_store_path):
+            return JsonResponse({"error": "Invalid vector_store_path"}, status=400)
     else:
         # Validate that the provided path exists and has an index
         if not os.path.isabs(vector_store_path):
             # If relative, assume it's relative to VECTOR_STORE_BASE_PATH
             vector_store_path = os.path.join(VECTOR_STORE_BASE_PATH, vector_store_path)
-        
+
         # Normalize the path to handle any path issues
         vector_store_path = os.path.normpath(vector_store_path)
-        
+        if not _is_safe_vector_store_path(vector_store_path):
+            return JsonResponse({"error": "Invalid vector_store_path"}, status=400)
+
         index_file = os.path.join(vector_store_path, "index.faiss")
         if not os.path.exists(index_file):
             return JsonResponse({
