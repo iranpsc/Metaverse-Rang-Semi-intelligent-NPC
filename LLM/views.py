@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -55,8 +56,12 @@ def get_user_memory_path(user_id):
     Get user-specific memory path.
     Ensures the resolved path stays داخل MEMORY_BASE_PATH.
     """
+    safe_user_id = str(user_id).strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", safe_user_id):
+        raise ValueError("Invalid user_id")
+
     base_dir = os.path.realpath(MEMORY_BASE_PATH)
-    candidate_dir = os.path.realpath(os.path.join(base_dir, f"user_{user_id}"))
+    candidate_dir = os.path.realpath(os.path.join(base_dir, f"user_{safe_user_id}"))
 
     # Prevent path traversal / absolute-path escape
     if os.path.commonpath([base_dir, candidate_dir]) != base_dir:
