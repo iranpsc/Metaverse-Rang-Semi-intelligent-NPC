@@ -506,11 +506,12 @@ def vector_store_rebuild_api(request):
         return JsonResponse({"error": "vector_store_path is required"}, status=400)
 
     dataset_abs_path = dataset_path if os.path.isabs(dataset_path) else os.path.join(BASE_DIR, dataset_path)
-    vector_store_abs_path = (
-        vector_store_target
-        if os.path.isabs(vector_store_target)
-        else os.path.join(VECTOR_STORE_BASE_PATH, vector_store_target)
-    )
+
+    vector_store_base_abs = os.path.realpath(VECTOR_STORE_BASE_PATH)
+    safe_target = vector_store_target.lstrip("/\\")
+    vector_store_abs_path = os.path.realpath(os.path.join(vector_store_base_abs, safe_target))
+    if os.path.commonpath([vector_store_base_abs, vector_store_abs_path]) != vector_store_base_abs:
+        return JsonResponse({"error": "Invalid vector_store_path"}, status=400)
 
     if not os.path.exists(dataset_abs_path):
         return JsonResponse({"error": f"Dataset not found at {dataset_abs_path}"}, status=404)
