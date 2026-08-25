@@ -173,7 +173,8 @@
         function addMessage(message) {
             const messagesDiv = document.getElementById('messages');
             const timestamp = new Date().toLocaleTimeString();
-            messagesDiv.innerHTML += `[${timestamp}] ${message}\n`;
+            const line = document.createTextNode(`[${timestamp}] ${message}\n`);
+            messagesDiv.appendChild(line);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
         
