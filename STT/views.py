@@ -318,7 +318,7 @@ def delete_recording(request, recording_id):
     except AudioRecording.DoesNotExist:
         return JsonResponse({'status': 'error', 'message': 'Recording not found'}, status=404)
     except Exception:
-        print(traceback.format_exc())
+        traceback.print_exc()
         return JsonResponse({'status': 'error', 'message': 'Internal server error'}, status=500)
 
 
