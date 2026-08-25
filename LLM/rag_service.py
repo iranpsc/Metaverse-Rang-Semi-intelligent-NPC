@@ -109,7 +109,7 @@ class RAGService:
         except Exception as e:
             print(f"ERROR in process_user_rss for user {user_id}: {e}")
             traceback.print_exc()
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": "An internal error occurred while processing RSS feeds."}
 
     def build_vector_store(self, dataset_path: str, vector_store_path: str, user_id: str = "system") -> dict:
         try:
