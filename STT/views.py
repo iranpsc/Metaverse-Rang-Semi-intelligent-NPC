@@ -82,8 +82,7 @@ WHISPER_MODELS = {}
 def _resolve_model_key(model_choice):
     """Normalize model choice to a cache key and loading arguments.
 
-    Accepts either standard Whisper sizes (e.g., "tiny", "base", ...),
-    a HuggingFace repo id (e.g., "openai/whisper-small"), or a local .pt path.
+    Accepts standard Whisper model sizes and aliases from user input.
     Returns a tuple (cache_key, load_arg, device).
     """
     # Auto-detect device: use CUDA if available, otherwise CPU
@@ -93,20 +92,26 @@ def _resolve_model_key(model_choice):
         print(f"INFO: Using GPU (CUDA) for Whisper model")
     else:
         print(f"INFO: Using CPU for Whisper model (CUDA not available)")
-    if not model_choice:
-        # Default to bundled Tiny model if present; otherwise fallback to standard tiny
+
+    allowed_models = {
+        "tiny", "base", "small", "medium", "large",
+        "turbo", "tiny.en", "base.en", "small.en", "medium.en"
+    }
+
+    normalized_choice = (model_choice or "").strip().lower()
+    if not normalized_choice:
+        # Default to bundled Turbo model if present; otherwise fallback to standard turbo
         bundled_path = os.path.join(
             os.path.dirname(__file__), "model", "Turbo.pt")
         if os.path.exists(bundled_path):
             return (bundled_path, bundled_path, device)
         return ("turbo", "turbo", device)
 
-    # If it's an existing local file, load from path
-    if os.path.exists(model_choice):
-        return (model_choice, model_choice, device)
+    # Only allow known safe model identifiers from user input
+    if normalized_choice not in allowed_models:
+        return ("turbo", "turbo", device)
 
-    # Otherwise treat it as a model name/repo id
-    return (model_choice, model_choice, device)
+    return (normalized_choice, normalized_choice, device)
 
 
 def get_whisper_model(model_choice):
