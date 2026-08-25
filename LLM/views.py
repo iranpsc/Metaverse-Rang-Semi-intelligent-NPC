@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -50,17 +51,30 @@ def get_user_id(request):
     return str(request.session['user_id'])
 
 
+def _sanitize_user_id(user_id: str) -> str:
+    """
+    Normalize and validate user_id before using it in filesystem paths.
+    Only allow a conservative identifier charset.
+    """
+    normalized = str(user_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", normalized):
+        raise ValueError("Invalid user_id")
+    return normalized
+
+
 def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
+    safe_user_id = _sanitize_user_id(user_id)
+    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{safe_user_id}")
     os.makedirs(user_memory_dir, exist_ok=True)
     return user_memory_dir
 
 
 def get_user_vector_store_path(user_id: str) -> str:
-    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{user_id}", "rss_store")
+    safe_user_id = _sanitize_user_id(user_id)
+    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{safe_user_id}", "rss_store")
     base_real = os.path.realpath(VECTOR_STORE_BASE_PATH)
     user_store_real = os.path.realpath(user_store_dir)
 
