@@ -507,7 +507,17 @@ def vector_store_rebuild_api(request):
 
     def _resolve_under_base(base_path: str, user_path: str) -> str:
         base = Path(base_path).resolve()
-        candidate = (base / user_path).resolve()
+
+        normalized = (user_path or "").replace("\\", "/").strip()
+        rel_path = Path(normalized)
+
+        if rel_path.is_absolute():
+            raise ValueError("Absolute paths are not allowed")
+
+        if any(part in ("..", "") for part in rel_path.parts):
+            raise ValueError("Path traversal is not allowed")
+
+        candidate = (base / rel_path).resolve(strict=False)
         try:
             candidate.relative_to(base)
         except ValueError:
