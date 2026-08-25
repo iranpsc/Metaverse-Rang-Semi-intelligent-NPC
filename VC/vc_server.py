@@ -104,7 +104,12 @@ def _resolve_sample(filename):
     name = os.path.basename((filename or "").strip())
     if not name:
         raise FileNotFoundError("empty target filename")
-    path = os.path.join(SAMPLES_DIR, name)
+
+    base_dir = os.path.realpath(SAMPLES_DIR)
+    path = os.path.realpath(os.path.join(base_dir, name))
+    if os.path.commonpath([base_dir, path]) != base_dir:
+        raise FileNotFoundError("invalid target filename")
+
     if not os.path.isfile(path):
         raise FileNotFoundError(f"voice sample not found: {name}")
     return path, name
