@@ -226,7 +226,7 @@ class RAGService:
         except Exception as e:
             print(f"ERROR in process_single_url for user {user_id}: {e}")
             traceback.print_exc()
-            return {"status": "error", "message": str(e)}
+            return {"status": "error", "message": "Failed to process URL due to an internal error."}
     
     def process_user_files(
         self,
