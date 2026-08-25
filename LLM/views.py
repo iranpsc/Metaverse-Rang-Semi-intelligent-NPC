@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -302,7 +303,10 @@ def upload_rss_feed(request):
     except json.JSONDecodeError:
         return JsonResponse({"error": "Invalid JSON payload"}, status=400)
 
-    user_id = str(data.get("user_id") or get_user_id(request))
+    raw_user_id = str(data.get("user_id") or get_user_id(request) or "").strip()
+    user_id = re.sub(r"[^A-Za-z0-9_-]", "_", raw_user_id)[:64]
+    if not user_id:
+        user_id = "anonymous"
     
     # Support both single feed_url (backward compatibility) and rss_links (list)
     feed_url = data.get("feed_url")
