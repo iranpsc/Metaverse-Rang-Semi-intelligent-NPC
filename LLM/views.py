@@ -506,11 +506,17 @@ def vector_store_rebuild_api(request):
         return JsonResponse({"error": "vector_store_path is required"}, status=400)
     if os.path.isabs(vector_store_target):
         return JsonResponse({"error": "Absolute vector_store_path is not allowed"}, status=400)
+    if "\x00" in vector_store_target:
+        return JsonResponse({"error": "Invalid vector_store_path"}, status=400)
+
+    target_path = Path(vector_store_target)
+    if any(part == ".." for part in target_path.parts):
+        return JsonResponse({"error": "Invalid vector_store_path"}, status=400)
 
     dataset_abs_path = dataset_path if os.path.isabs(dataset_path) else os.path.join(BASE_DIR, dataset_path)
 
     vector_store_base = Path(VECTOR_STORE_BASE_PATH).resolve()
-    vector_store_abs_path_obj = (vector_store_base / vector_store_target).resolve()
+    vector_store_abs_path_obj = (vector_store_base / target_path).resolve()
     try:
         vector_store_abs_path_obj.relative_to(vector_store_base)
     except ValueError:
