@@ -17,6 +17,30 @@ from .rss_ingestor import RSSIngestor, RSS_SCHEMA
 
 # تنظیم مسیرهای وکتوراستور و مموری
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+
+def _resolve_and_validate_path(base_path: Path, user_path: str, allow_absolute: bool = False) -> Path:
+    """
+    Resolve a user-provided path and ensure it stays داخل base_path.
+    """
+    base_resolved = base_path.resolve()
+    raw = (user_path or "").strip()
+
+    if not raw:
+        raise ValueError("Path is required")
+
+    candidate = Path(raw)
+    if candidate.is_absolute():
+        if not allow_absolute:
+            raise ValueError("Absolute paths are not allowed")
+        candidate = candidate.resolve()
+    else:
+        candidate = (base_resolved / candidate).resolve()
+
+    if not (candidate == base_resolved or base_resolved in candidate.parents):
+        raise ValueError("Path escapes allowed base directory")
+
+    return candidate
 DATA_BASE_PATH = os.path.join(BASE_DIR, "data")
 VECTOR_STORE_PATH = os.path.join(DATA_BASE_PATH, "vectorstores/main_store")
 VECTOR_STORE_BASE_PATH = os.path.join(DATA_BASE_PATH, "vectorstores")
@@ -505,21 +529,20 @@ def vector_store_rebuild_api(request):
     if not vector_store_target:
         return JsonResponse({"error": "vector_store_path is required"}, status=400)
 
-    dataset_abs_path = dataset_path if os.path.isabs(dataset_path) else os.path.join(BASE_DIR, dataset_path)
-    vector_store_abs_path = (
-        vector_store_target
-        if os.path.isabs(vector_store_target)
-        else os.path.join(VECTOR_STORE_BASE_PATH, vector_store_target)
-    )
+    try:
+        dataset_abs_path = _resolve_and_validate_path(BASE_DIR, dataset_path, allow_absolute=True)
+        vector_store_abs_path = _resolve_and_validate_path(Path(VECTOR_STORE_BASE_PATH), vector_store_target, allow_absolute=False)
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=400)
 
-    if not os.path.exists(dataset_abs_path):
+    if not dataset_abs_path.exists():
         return JsonResponse({"error": f"Dataset not found at {dataset_abs_path}"}, status=404)
 
-    os.makedirs(vector_store_abs_path, exist_ok=True)
+    vector_store_abs_path.mkdir(parents=True, exist_ok=True)
     rag_service = RAGService()
     result = rag_service.build_vector_store(
-        dataset_path=dataset_abs_path,
-        vector_store_path=vector_store_abs_path,
+        dataset_path=str(dataset_abs_path),
+        vector_store_path=str(vector_store_abs_path),
         user_id=user_id,
     )
 
