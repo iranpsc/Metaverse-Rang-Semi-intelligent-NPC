@@ -505,12 +505,20 @@ def vector_store_rebuild_api(request):
     if not vector_store_target:
         return JsonResponse({"error": "vector_store_path is required"}, status=400)
 
-    dataset_abs_path = dataset_path if os.path.isabs(dataset_path) else os.path.join(BASE_DIR, dataset_path)
-    vector_store_abs_path = (
-        vector_store_target
-        if os.path.isabs(vector_store_target)
-        else os.path.join(VECTOR_STORE_BASE_PATH, vector_store_target)
-    )
+    def _resolve_under_base(base_path: str, user_path: str) -> str:
+        base = Path(base_path).resolve()
+        candidate = (base / user_path).resolve()
+        try:
+            candidate.relative_to(base)
+        except ValueError:
+            raise ValueError("Path is outside allowed directory")
+        return str(candidate)
+
+    try:
+        dataset_abs_path = _resolve_under_base(str(BASE_DIR), dataset_path)
+        vector_store_abs_path = _resolve_under_base(str(VECTOR_STORE_BASE_PATH), vector_store_target)
+    except ValueError as e:
+        return JsonResponse({"error": str(e)}, status=400)
 
     if not os.path.exists(dataset_abs_path):
         return JsonResponse({"error": f"Dataset not found at {dataset_abs_path}"}, status=404)
