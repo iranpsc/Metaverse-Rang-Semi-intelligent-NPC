@@ -61,8 +61,14 @@ def get_user_memory_path(user_id):
 
 def get_user_vector_store_path(user_id: str) -> str:
     user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{user_id}", "rss_store")
-    os.makedirs(user_store_dir, exist_ok=True)
-    return user_store_dir
+    base_real = os.path.realpath(VECTOR_STORE_BASE_PATH)
+    user_store_real = os.path.realpath(user_store_dir)
+
+    if os.path.commonpath([base_real, user_store_real]) != base_real:
+        raise ValueError("Invalid user_id path")
+
+    os.makedirs(user_store_real, exist_ok=True)
+    return user_store_real
 
 
 def resolve_vector_store_path(user_id: str) -> str:
@@ -477,6 +483,11 @@ def upload_files(request):
 
         return JsonResponse(response, status=status_code)
 
+    except ValueError as e:
+        return JsonResponse(
+            {"status": "error", "message": str(e)},
+            status=400
+        )
     except Exception as e:
         traceback.print_exc()
         return JsonResponse(
