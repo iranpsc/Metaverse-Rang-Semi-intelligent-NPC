@@ -50,17 +50,31 @@ def get_user_id(request):
     return str(request.session['user_id'])
 
 
+def _safe_user_scoped_path(base_path: str, user_id: str, *subpaths: str) -> str:
+    """
+    Build a user-scoped path and ensure it stays داخل base_path after normalization.
+    """
+    base_abs = os.path.abspath(base_path)
+    candidate = os.path.join(base_abs, f"user_{user_id}", *subpaths)
+    candidate_abs = os.path.abspath(candidate)
+
+    if os.path.commonpath([base_abs, candidate_abs]) != base_abs:
+        raise ValueError("Invalid user_id path segment")
+
+    return candidate_abs
+
+
 def get_user_memory_path(user_id):
     """
     Get user-specific memory path.
     """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
+    user_memory_dir = _safe_user_scoped_path(MEMORY_BASE_PATH, user_id)
     os.makedirs(user_memory_dir, exist_ok=True)
     return user_memory_dir
 
 
 def get_user_vector_store_path(user_id: str) -> str:
-    user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{user_id}", "rss_store")
+    user_store_dir = _safe_user_scoped_path(VECTOR_STORE_BASE_PATH, user_id, "rss_store")
     os.makedirs(user_store_dir, exist_ok=True)
     return user_store_dir
 
