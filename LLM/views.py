@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import re
 from dataclasses import asdict
 from pathlib import Path
 
@@ -382,6 +383,11 @@ def upload_single_url(request):
     user_id = str(data.get("user_id") or get_user_id(request))
     url = data.get("url", "").strip()
     title = data.get("title", "").strip() or None  # Optional title
+
+    # Validate/sanitize user_id before using it in filesystem paths
+    user_id = user_id.strip()
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", user_id):
+        return JsonResponse({"error": "Invalid user_id format"}, status=400)
     
     if not url:
         return JsonResponse({"error": "URL is required"}, status=400)
@@ -390,8 +396,15 @@ def upload_single_url(request):
     if not (url.startswith("http://") or url.startswith("https://")):
         return JsonResponse({"error": "Invalid URL format. URL must start with http:// or https://"}, status=400)
 
-    # Build dataset path for user (same CSV file as RSS)
-    user_dataset_dir = os.path.join(RSS_DATASET_BASE_PATH, f"user_{user_id}")
+    # Build dataset path for user (same CSV file as RSS) with containment check
+    base_dataset_dir = os.path.realpath(RSS_DATASET_BASE_PATH)
+    candidate_user_dataset_dir = os.path.realpath(
+        os.path.join(base_dataset_dir, f"user_{user_id}")
+    )
+    if os.path.commonpath([base_dataset_dir, candidate_user_dataset_dir]) != base_dataset_dir:
+        return JsonResponse({"error": "Invalid dataset path"}, status=400)
+
+    user_dataset_dir = candidate_user_dataset_dir
     os.makedirs(user_dataset_dir, exist_ok=True)
     dataset_path = os.path.join(user_dataset_dir, "rss_dataset.csv")
     
