@@ -1,6 +1,7 @@
 # views.py
 import json
 import os
+import logging
 from dataclasses import asdict
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from .models import VoiceSample
 from .rag_service import RAGService
 from .rss_ingestor import RSSIngestor, RSS_SCHEMA
 
+logger = logging.getLogger(__name__)
 
 # تنظیم مسیرهای وکتوراستور و مموری
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -222,10 +224,11 @@ def rag_chat_api(request):
             # Client disconnected - this is normal for HTTP streaming
             raise
         except Exception as exc:
-            # Send error message via SSE
+            # Log full error details on server; return only generic error to client
+            logger.exception("Error while streaming RAG response", exc_info=exc)
             error_payload = json.dumps({
                 "type": "error", 
-                "message": str(exc)
+                "message": "An internal error occurred."
             }, ensure_ascii=False)
             yield f"data: {error_payload}\n\n"
             sys.stdout.flush()
