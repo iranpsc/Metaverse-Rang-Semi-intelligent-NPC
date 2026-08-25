@@ -60,7 +60,8 @@ class VectorStoreManager:
             vectorstore.save_local(str(vs_path))
             return {"status": "success", "message": f"Vector store built successfully."}
         except Exception as e:
-            return {"status": "error", "message": str(e)}
+            self._log(f"Error building vector store: {e}")
+            return {"status": "error", "message": "Failed to build vector store due to an internal error."}
 
     def load(self, vector_store_path: str) -> Optional[FAISS]:
         try:

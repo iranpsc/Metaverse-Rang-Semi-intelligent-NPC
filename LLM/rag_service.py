@@ -117,7 +117,8 @@ class RAGService:
             return vstore_manager.build(dataset_path, vector_store_path)
         except Exception as e:
             print(f"FATAL ERROR: {e}")
-            return {"status": "error", "message": str(e)}
+            traceback.print_exc()
+            return {"status": "error", "message": "Failed to build vector store due to an internal error."}
 
     def get_answer_for_user(self, user_id: str, question: str, vector_store_path: str, memory_path: str, model_name: str = None):
         """
