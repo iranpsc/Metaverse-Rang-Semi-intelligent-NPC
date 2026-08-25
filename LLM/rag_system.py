@@ -13,6 +13,7 @@ from langchain.schema import Document
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from werkzeug.utils import secure_filename
 
 import feedparser
 import trafilatura
@@ -157,7 +158,8 @@ class RSSUpdater:
         self.embeddings = embeddings
         self.dataset_path = Path(dataset_path)
         self.vector_store_path = Path(vector_store_path)
-        self.user_id = user_id
+        sanitized_user_id = secure_filename(str(user_id))
+        self.user_id = sanitized_user_id or "anonymous"
         self.verbose = verbose
         self.vstore_manager = VectorStoreManager(self.embeddings, user_id=self.user_id, verbose=self.verbose)
         
