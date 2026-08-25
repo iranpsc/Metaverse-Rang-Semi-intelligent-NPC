@@ -157,7 +157,8 @@ class RSSUpdater:
         self.embeddings = embeddings
         self.dataset_path = Path(dataset_path)
         self.vector_store_path = Path(vector_store_path)
-        self.user_id = user_id
+        safe_user_id = ''.join(c if c.isalnum() or c in ('_', '-') else '_' for c in str(user_id))
+        self.user_id = safe_user_id or "anonymous"
         self.verbose = verbose
         self.vstore_manager = VectorStoreManager(self.embeddings, user_id=self.user_id, verbose=self.verbose)
         
