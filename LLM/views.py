@@ -58,9 +58,11 @@ def get_user_memory_path(user_id):
     safe_user_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(user_id))
     user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{safe_user_id}")
 
-    base_abs = os.path.abspath(MEMORY_BASE_PATH)
-    target_abs = os.path.abspath(os.path.normpath(user_memory_dir))
-    if os.path.commonpath([base_abs, target_abs]) != base_abs:
+    # Canonicalize both paths to prevent traversal/symlink edge cases.
+    base_abs = os.path.realpath(MEMORY_BASE_PATH)
+    target_abs = os.path.realpath(os.path.normpath(user_memory_dir))
+    # Enforce that target is exactly base or a child of base.
+    if target_abs != base_abs and not target_abs.startswith(base_abs + os.sep):
         raise ValueError("Invalid user_id for memory path")
 
     os.makedirs(target_abs, exist_ok=True)
