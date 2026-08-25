@@ -3,6 +3,7 @@ from typing import List, Optional, Dict, Generator
 import pandas as pd
 import shutil
 import json
+import re
 from datetime import datetime
 from time import mktime
 import time
@@ -162,7 +163,9 @@ class RSSUpdater:
         self.vstore_manager = VectorStoreManager(self.embeddings, user_id=self.user_id, verbose=self.verbose)
         
         # فایل وضعیت RSS مخصوص این دیتاست/کاربر که در کنار فایل CSV ذخیره می‌شود
-        self.state_file = self.dataset_path.parent / f"rss_state_{self.user_id}.json"
+        # جلوگیری از Path Traversal با امن‌سازی user_id برای استفاده در نام فایل
+        safe_user_id = re.sub(r'[^A-Za-z0-9_-]', '_', str(self.user_id)).strip('_') or "anonymous"
+        self.state_file = self.dataset_path.parent / f"rss_state_{safe_user_id}.json"
 
     def _log(self, message: str):
         if self.verbose: print(f"[RSSUpdater][{self.user_id}] {message}")
