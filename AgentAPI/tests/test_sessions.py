@@ -5,6 +5,7 @@ from livekit import api
 
 from AgentAPI.livekit import create_participant_token
 from AgentAPI.models import AgentSession
+from pipeline_core.config import ConfigurationError
 
 
 LIVEKIT_TEST_SETTINGS = {
@@ -56,6 +57,23 @@ class AgentSessionApiTests(TestCase):
             content_type="application/json",
         )
         self.assertEqual(response.status_code, 400)
+
+    @patch("AgentAPI.views.create_participant_token")
+    def test_configuration_error_does_not_expose_exception_details(self, create_token):
+        create_token.side_effect = ConfigurationError("secret backend details")
+
+        response = self.client.post(
+            "/api/v1/agent/sessions/",
+            {"user_id": "unity-user", "vector_store": "main_store"},
+            content_type="application/json",
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(
+            response.json(),
+            {"error": "Realtime service is not configured.", "code": "configuration_error"},
+        )
+        self.assertNotIn("secret backend details", response.content.decode())
 
     def test_swagger_schema_is_available(self):
         response = self.client.get("/api/schema/")

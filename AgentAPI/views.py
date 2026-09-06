@@ -109,12 +109,12 @@ class AgentSessionCreateView(APIView):
             dispatch_id = async_to_sync(provision_room_and_agent)(
                 room_name=room_name, metadata=dispatch_metadata
             )
-        except (ConfigurationError, ValueError) as exc:
+        except (ConfigurationError, ValueError):
             session.status = AgentSession.Status.FAILED
             session.save(update_fields=("status", "updated_at"))
             logger.exception("Agent session configuration failed", extra={"session_id": str(session.id)})
             return Response(
-                {"error": str(exc), "code": "configuration_error"},
+                {"error": "Realtime service is not configured.", "code": "configuration_error"},
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         except (api.TwirpError, aiohttp.ClientError, OSError):

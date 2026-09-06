@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import hashlib
 import json
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -32,6 +34,8 @@ REQUESTS = Counter("metarang_llm_requests_total", "LLM/RAG requests", ("result",
 DURATION = Histogram("metarang_llm_duration_seconds", "LLM/RAG generation duration")
 FIRST_TOKEN = Histogram("metarang_llm_first_token_seconds", "LLM time to first token")
 ACTIVE = Gauge("metarang_llm_active_requests", "Active LLM/RAG streams")
+
+_STORE_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
 
 
 class ChatRequest(BaseModel):
@@ -90,13 +94,32 @@ async def metrics() -> Response:
 
 
 def _resolve_store(name: str) -> Path:
-    if ".." in name.split("/") or name.startswith("/"):
+    parts = name.split("/")
+    if not parts or any(not _STORE_COMPONENT.fullmatch(part) for part in parts):
         raise HTTPException(status_code=400, detail="Invalid vector_store")
     root = (data_root() / "vectorstores").resolve()
-    candidate = (root / name.strip("/")).resolve()
-    if root not in candidate.parents and candidate != root:
-        raise HTTPException(status_code=400, detail="Invalid vector_store")
-    return candidate
+    requested_parts = tuple(parts)
+
+    # Select a path discovered beneath the trusted root instead of constructing
+    # a filesystem path directly from request data. Resolving each discovered
+    # path also excludes vector-store symlinks that escape the trusted root.
+    for index_file in root.rglob("index.faiss"):
+        try:
+            store = index_file.parent.resolve(strict=True)
+            relative = store.relative_to(root)
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        if relative.parts == requested_parts:
+            return store
+
+    raise HTTPException(status_code=404, detail="Vector store was not found")
+
+
+def _user_memory_path(user_id: str) -> Path:
+    # A fixed-length digest preserves stable per-user memory without allowing a
+    # user-controlled identifier to become part of a filesystem path.
+    user_key = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
+    return data_root() / "memories" / f"user_{user_key}"
 
 
 @app.post("/v1/chat/stream")
@@ -110,7 +133,7 @@ async def chat_stream(
         raise HTTPException(status_code=503, detail="LLM/RAG service is not ready")
     store_path = _resolve_store(payload.vector_store)
     safe_user = safe_identifier(payload.user_id, fallback="anonymous", max_length=128)
-    memory_path = data_root() / "memories" / f"user_{safe_user}"
+    memory_path = _user_memory_path(payload.user_id)
     memory_path.mkdir(parents=True, exist_ok=True)
     parent_context = extract_trace_context(request.headers)
 
@@ -120,7 +143,7 @@ async def chat_stream(
         )
         loop = asyncio.get_running_loop()
         stop = threading.Event()
-        started = time.monotonic()
+        started = 0.0
 
         def produce() -> None:
             def enqueue(item: tuple[str, object]) -> bool:
@@ -154,11 +177,17 @@ async def chat_stream(
         with tracer.start_as_current_span("rag_llm.stream", context=parent_context) as span:
             span.set_attribute("session.id", x_session_id)
             span.set_attribute("turn.id", x_turn_id)
-            ACTIVE.inc()
             first = True
-            task = asyncio.create_task(asyncio.to_thread(produce), name=f"llm-{x_turn_id}")
+            task: asyncio.Task | None = None
+            active = False
             try:
                 async with runtime.semaphore:
+                    started = time.monotonic()
+                    ACTIVE.inc()
+                    active = True
+                    task = asyncio.create_task(
+                        asyncio.to_thread(produce), name=f"llm-{x_turn_id}"
+                    )
                     while True:
                         kind, value = await asyncio.wait_for(
                             queue.get(), timeout=float(os.getenv("LLM_GENERATION_TIMEOUT_SECONDS", "180"))
@@ -189,8 +218,10 @@ async def chat_stream(
                 yield json.dumps({"type": "error", "code": "llm_failed"}) + "\n"
             finally:
                 stop.set()
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
-                ACTIVE.dec()
+                if task is not None:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                if active:
+                    ACTIVE.dec()
 
     return StreamingResponse(generate(), media_type="application/x-ndjson")
