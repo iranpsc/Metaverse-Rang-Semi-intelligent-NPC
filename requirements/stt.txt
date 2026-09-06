@@ -1,0 +1,6 @@
+-r observability.txt
+fastapi==0.141.1
+numpy==1.26.4
+openai-whisper==20250625
+torch==2.4.0
+uvicorn[standard]==0.38.0

@@ -19,14 +19,22 @@ import os
 import re
 import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [TTS] %(message)s")
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+
+from pipeline_core.observability import configure_observability, extract_trace_context, get_tracer
+
+configure_observability("tts")
 log = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
+REQUESTS = Counter("metarang_tts_requests_total", "TTS requests", ("result",))
+DURATION = Histogram("metarang_tts_duration_seconds", "TTS synthesis duration")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_PATH = os.path.join(BASE_DIR, "best_model_91323.pth")
-CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
+MODEL_PATH = os.environ.get("TTS_MODEL_PATH", os.path.join(BASE_DIR, "best_model_91323.pth"))
+CONFIG_PATH = os.environ.get("TTS_CONFIG_PATH", os.path.join(BASE_DIR, "config.json"))
 HOST = os.environ.get("TTS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("TTS_PORT", "5002"))
 MAX_TEXT_LENGTH = 2000
@@ -96,8 +104,15 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        if self.path == "/health":
+        if self.path in {"/health", "/health/live", "/health/ready"}:
             self._send_json(200, {"status": "ok", "cuda": USE_CUDA})
+        elif self.path == "/metrics":
+            body = generate_latest()
+            self.send_response(200)
+            self.send_header("Content-Type", CONTENT_TYPE_LATEST)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -107,6 +122,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", 0))
+            if length <= 0 or length > 32_768:
+                raise ValueError("invalid body length")
             data = json.loads(self.rfile.read(length).decode("utf-8"))
         except (ValueError, json.JSONDecodeError):
             self._send_json(400, {"error": "invalid JSON body"})
@@ -119,12 +136,25 @@ class Handler(BaseHTTPRequestHandler):
         if len(text) > MAX_TEXT_LENGTH:
             text = text[:MAX_TEXT_LENGTH]
 
-        try:
-            wav_bytes = synthesize_wav_bytes(text)
-        except Exception as exc:
-            log.exception("Synthesis failed for text: %.80s", text)
-            self._send_json(500, {"error": f"synthesis failed: {exc}"})
-            return
+        started = time.monotonic()
+        context = extract_trace_context(self.headers)
+        with tracer.start_as_current_span("tts.synthesize", context=context) as span:
+            try:
+                wav_bytes = synthesize_wav_bytes(text)
+            except Exception:
+                REQUESTS.labels("error").inc()
+                log.exception("Synthesis failed", extra={"event": "tts_error"})
+                self._send_json(500, {"error": "synthesis failed"})
+                return
+            elapsed = time.monotonic() - started
+            DURATION.observe(elapsed)
+            REQUESTS.labels("success").inc()
+            span.set_attribute("tts.text_length", len(text))
+            span.add_event("tts.first_audio", {"duration_ms": elapsed * 1000})
+            log.info(
+                "Synthesis completed",
+                extra={"event": "tts_complete", "duration_ms": round(elapsed * 1000, 1)},
+            )
 
         self.send_response(200)
         self.send_header("Content-Type", "audio/wav")

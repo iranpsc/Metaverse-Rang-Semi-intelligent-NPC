@@ -13,9 +13,16 @@ from langchain.schema import Document
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+import logging
+
+from pipeline_core.observability import get_tracer
 
 import feedparser
 import trafilatura
+from filelock import FileLock
+
+logger = logging.getLogger(__name__)
+tracer = get_tracer(__name__)
 
 class VectorStoreManager:
     """مدیریت ساخت و بارگذاری وکتوراستورها."""
@@ -104,7 +111,7 @@ class MemoryManager:
 
     def _log(self, message: str):
         if self.verbose: print(f"[MemoryManager][{self.user_id}] {message}")
-        
+
     def clear(self, memory_path: str) -> Dict:
         try:
             mem_path = Path(memory_path)
@@ -120,8 +127,9 @@ class MemoryManager:
         if not history_file.exists():
             return "هیچ تاریخچه مکالمه‌ای وجود ندارد."
         try:
-            with open(history_file, 'r', encoding='utf-8') as f:
-                history = json.load(f)
+            with FileLock(str(history_file) + ".lock", timeout=10):
+                with open(history_file, 'r', encoding='utf-8') as f:
+                    history = json.load(f)
             recent_history = history[-5:] 
             context_text = "\n---\n".join([f"س: {mem['question']}\nج: {mem['answer']}" for mem in recent_history])
             return context_text
@@ -130,21 +138,26 @@ class MemoryManager:
 
     def add_interaction(self, memory_path: str, question: str, answer: str):
         history_file = Path(memory_path) / "conversation_history.json"
-        history = []
-        if history_file.exists():
-            try:
-                with open(history_file, 'r', encoding='utf-8') as f:
-                    history = json.load(f)
-            except: pass
-        
-        interaction = {"timestamp": datetime.now().isoformat(), "question": question, "answer": answer}
-        history.append(interaction)
-        if len(history) > 50: history = history[-50:]
-            
         try:
             Path(memory_path).mkdir(parents=True, exist_ok=True)
-            with open(history_file, 'w', encoding='utf-8') as f:
-                json.dump(history, f, ensure_ascii=False, indent=2)
+            with FileLock(str(history_file) + ".lock", timeout=10):
+                history = []
+                if history_file.exists():
+                    try:
+                        with open(history_file, 'r', encoding='utf-8') as f:
+                            history = json.load(f)
+                    except (OSError, json.JSONDecodeError):
+                        history = []
+                history.append({
+                    "timestamp": datetime.now().isoformat(),
+                    "question": question,
+                    "answer": answer,
+                })
+                history = history[-50:]
+                temporary = history_file.with_suffix(".tmp")
+                with open(temporary, 'w', encoding='utf-8') as f:
+                    json.dump(history, f, ensure_ascii=False, indent=2)
+                temporary.replace(history_file)
         except Exception as e:
             self._log(f"Error saving interaction: {e}")
 
@@ -317,7 +330,6 @@ class RAGSession:
 پاسخ:""",
             input_variables=["context", "question", "memory_context"]
         )
-        
         def format_docs(docs):
             return "\n\n".join(doc.page_content for doc in docs)
 
@@ -339,7 +351,10 @@ class RAGSession:
 
         t0 = time.time()
         vectorstore = self.vstore_manager.load(vector_store_path)
-        print(f"Load VectorStore: {time.time() - t0:.4f}s")
+        logger.info(
+            "Vector store loaded",
+            extra={"event": "vector_store_loaded", "duration_ms": round((time.time() - t0) * 1000, 1)},
+        )
 
         if not vectorstore:
             yield "هنوز دانشی برای شما ذخیره نشده است."
@@ -352,10 +367,18 @@ class RAGSession:
 
         # Retrieve relevant documents
         retriever = vectorstore.as_retriever(search_type=self.config['SEARCH_TYPE'], search_kwargs={"k": self.config.get('TOP_K_RESULTS', 2)})
-        docs = retriever.get_relevant_documents(question)
-        print(f"Retrieved {len(docs)} documents for question: '{question}'")
-        for i, doc in enumerate(docs):
-            print(f"Doc {i+1}: {doc.page_content[:200]}...")
+        with tracer.start_as_current_span("rag.retrieve") as retrieval_span:
+            retrieval_started = time.time()
+            docs = retriever.get_relevant_documents(question)
+            retrieval_span.set_attribute("rag.document_count", len(docs))
+            logger.info(
+                "RAG retrieval completed",
+                extra={
+                    "event": "rag_retrieval_complete",
+                    "document_count": len(docs),
+                    "duration_ms": round((time.time() - retrieval_started) * 1000, 1),
+                },
+            )
 
         # Prepare prompt for streaming (bypass StrOutputParser which buffers output)
         def format_docs(docs):
@@ -380,7 +403,6 @@ class RAGSession:
 پاسخ:""",
             input_variables=["context", "question", "memory_context"]
         )
-        
         # Format prompt with retrieved context
         context = format_docs(docs)
         formatted_prompt = prompt.format(
@@ -389,17 +411,19 @@ class RAGSession:
             memory_context=memory_context
         )
         
-        print(f"Prepare Chain & Memory: {time.time() - t1:.4f}s")
+        logger.info(
+            "RAG prompt prepared",
+            extra={"event": "rag_prompt_ready", "duration_ms": round((time.time() - t1) * 1000, 1)},
+        )
 
         full_answer = ""
         t_gen_start = time.time()
         first_token = True
         chunk_count = 0
 
-        print(f"Starting to stream response for question: {question}", flush=True)
+        logger.info("LLM generation started", extra={"event": "llm_started"})
         # Stream directly from LLM to get token-by-token streaming
         try:
-            import sys
             for chunk in self.llm.stream(formatted_prompt):
                 chunk_count += 1
                 
@@ -417,24 +441,25 @@ class RAGSession:
                 if not chunk_text:
                     continue
                 
-                # Only log first few chunks and every 50th chunk to reduce overhead
-                if chunk_count <= 3 or chunk_count % 50 == 0:
-                    print(f"Chunk {chunk_count}: '{chunk_text[:100]}...' (len={len(chunk_text)})", flush=True)
                 if first_token:
-                    print(f"Time To First Token (Latency): {time.time() - t_gen_start:.4f}s", flush=True)
+                    logger.info(
+                        "LLM first token",
+                        extra={
+                            "event": "llm_first_token",
+                            "duration_ms": round((time.time() - t_gen_start) * 1000, 1),
+                        },
+                    )
                     first_token = False
 
                 full_answer += chunk_text
-                # Yield immediately without any delay
                 yield chunk_text
-                sys.stdout.flush()  # Force flush to ensure logs are written immediately
                 
-        except Exception as stream_error:
-            print(f"Error during streaming: {stream_error}")
-            import traceback
-            traceback.print_exc()
-            # Fallback: try using invoke and yield character by character
-            print("Falling back to non-streaming mode...")
+        except Exception:
+            logger.warning(
+                "Streaming generation failed; trying non-streaming fallback",
+                extra={"event": "llm_stream_fallback"},
+                exc_info=True,
+            )
             try:
                 response = self.llm.invoke(formatted_prompt)
                 response_text = response.content if hasattr(response, 'content') else str(response)
@@ -445,17 +470,24 @@ class RAGSession:
                         chunk = response_text[i:i+chunk_size]
                         full_answer += chunk
                         yield chunk
-            except Exception as fallback_error:
-                print(f"Fallback also failed: {fallback_error}")
-                traceback.print_exc()
+            except Exception:
+                logger.exception("LLM fallback generation failed", extra={"event": "llm_error"})
                 yield "خطا در تولید پاسخ."
 
-        print(f"Total chunks: {chunk_count}")
-        print(f"Total Text Generation Time: {time.time() - t_gen_start:.4f}s")
-        print(f"Full answer: '{full_answer}'")
+        logger.info(
+            "LLM generation completed",
+            extra={
+                "event": "llm_complete",
+                "chunk_count": chunk_count,
+                "answer_length": len(full_answer),
+                "duration_ms": round((time.time() - t_gen_start) * 1000, 1),
+            },
+        )
 
         if self.config.get('ENABLE_MEMORY', True):
             self.memory_manager.add_interaction(memory_path, question, full_answer.strip())
 
-        print(f"Total Process Time: {time.time() - t_total_start:.4f}s")
-        
+        logger.info(
+            "RAG request completed",
+            extra={"event": "rag_complete", "duration_ms": round((time.time() - t_total_start) * 1000, 1)},
+        )

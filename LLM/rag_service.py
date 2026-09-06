@@ -1,5 +1,4 @@
-import config
-from django import conf
+import logging
 import torch
 import traceback
 import threading
@@ -11,6 +10,8 @@ from .config import CONFIG
 from .rag_system import RAGSession, VectorStoreManager, MemoryManager, RSSUpdater
 from .utils import extract_text_from_file
 import os
+
+logger = logging.getLogger(__name__)
 
 class RAGService:
     _instance = None
@@ -24,17 +25,17 @@ class RAGService:
     def __init__(self):
         if self._initialized: return
         
-        print("Initializing RAGService...")
+        logger.info("Initializing RAG service", extra={"event": "rag_initializing"})
         self.config = CONFIG
         self.embeddings = None
         self.llm = None
         self._initialize_base_models()
         self._initialized = True
-        print("RAGService ready.")
+        logger.info("RAG service ready", extra={"event": "rag_ready"})
 
     def _initialize_base_models(self):
         device = 'cuda' if torch.cuda.is_available() and self.config['USE_GPU'] else 'cpu'
-        print(f"Loading Embeddings on {device}...")
+        logger.info("Loading embeddings", extra={"event": "embeddings_loading", "device": device})
         self.embeddings = HuggingFaceEmbeddings(
             model_name=self.config['EMBEDDING_MODEL'],
             model_kwargs={'device': device},
@@ -56,7 +57,8 @@ class RAGService:
             repeat_penalty=self.config['REPEAT_PENALTY'],
             top_k=self.config['TOP_K'],
             top_p=self.config['TOP_P'],
-            stop=self.config['STOP_TOKENS']
+            stop=self.config['STOP_TOKENS'],
+            client_kwargs={"timeout": self.config["OLLAMA_REQUEST_TIMEOUT_SECONDS"]},
         )
 
     # --- API Methods ---
@@ -136,8 +138,7 @@ class RAGService:
             # Use yield from to delegate to the inner generator
             yield from rag_session.get_answer(question, vector_store_path, memory_path)
         except Exception as e:
-            print(f"ERROR: {e}")
-            traceback.print_exc()
+            logger.exception("RAG answer generation failed", extra={"event": "rag_error"})
             
             yield "خطای داخلی در پردازش درخواست."
 

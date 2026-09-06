@@ -16,8 +16,7 @@ from .rss_ingestor import RSSIngestor, RSS_SCHEMA
 
 
 # تنظیم مسیرهای وکتوراستور و مموری
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-DATA_BASE_PATH = os.path.join(BASE_DIR, "data")
+DATA_BASE_PATH = str(settings.DATA_ROOT)
 VECTOR_STORE_PATH = os.path.join(DATA_BASE_PATH, "vectorstores/main_store")
 VECTOR_STORE_BASE_PATH = os.path.join(DATA_BASE_PATH, "vectorstores")
 RSS_DATASET_BASE_PATH = os.path.join(DATA_BASE_PATH, "rss_datasets")
@@ -505,7 +504,11 @@ def vector_store_rebuild_api(request):
     if not vector_store_target:
         return JsonResponse({"error": "vector_store_path is required"}, status=400)
 
-    dataset_abs_path = dataset_path if os.path.isabs(dataset_path) else os.path.join(BASE_DIR, dataset_path)
+    dataset_abs_path = (
+        dataset_path
+        if os.path.isabs(dataset_path)
+        else os.path.join(DATA_BASE_PATH, dataset_path)
+    )
     vector_store_abs_path = (
         vector_store_target
         if os.path.isabs(vector_store_target)

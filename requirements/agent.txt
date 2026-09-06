@@ -1,0 +1,4 @@
+-r observability.txt
+httpx==0.28.1
+livekit-agents==1.7.1
+numpy==1.26.4

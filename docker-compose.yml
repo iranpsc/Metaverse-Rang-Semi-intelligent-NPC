@@ -1,107 +1,369 @@
+x-observability-env: &observability-env
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+  # Send application logs over OTLP. This is portable across standard, Snap,
+  # and rootless Docker installations and does not require the Docker data root.
+  OTEL_EXPORT_LOGS: "true"
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
 services:
   redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    image: redis:7.4.10-alpine
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
-      timeout: 30s
-      retries: 3
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  livekit:
+    image: livekit/livekit-server:v1.13.5
+    command: ["--config", "/etc/livekit.yaml"]
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    volumes:
+      - ./deploy/livekit/livekit.dev.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "${LIVEKIT_HTTP_PORT:-7880}:7880"
+      - "${LIVEKIT_RTC_TCP_PORT:-7881}:7881/tcp"
+      - "${LIVEKIT_RTC_UDP_PORT:-7882}:7882/udp"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
 
   web:
-    build: .
-    command: sh -c "mkdir -p /app/db /app/staticfiles /app/data /app/models && python manage.py migrate && python manage.py collectstatic --noinput || true && uvicorn MetaRangNPC.asgi:application --host 0.0.0.0 --port 8000"
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      <<: *observability-env
+      DJANGO_SETTINGS_MODULE: MetaRangNPC.settings
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-development-only-change-me}
+      # `web` is required for Prometheus and the in-network smoke client.
+      DJANGO_ALLOWED_HOSTS: web,${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-http://localhost:8000}
+      CORS_ALLOW_ALL_ORIGINS: ${CORS_ALLOW_ALL_ORIGINS:-true}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
+      DATABASE_PATH: /app/runtime/db.sqlite3
+      DATA_ROOT: /app/data
+      MEDIA_ROOT: /app/media
+      REDIS_URL: redis://redis:6379/0
+      REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-5}
+      LIVEKIT_URL: ${LIVEKIT_PUBLIC_URL:-ws://localhost:7880}
+      LIVEKIT_API_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-metarang-agent}
+      LIVEKIT_TOKEN_TTL_SECONDS: ${LIVEKIT_TOKEN_TTL_SECONDS:-600}
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_REQUEST_TIMEOUT_SECONDS: ${OLLAMA_REQUEST_TIMEOUT_SECONDS:-180}
+      EMBEDDING_MODEL_PATH: /models/sentence_embeddings
+      LLM_MODEL: ${LLM_MODEL:-dorna2}
+      LLM_USE_GPU: ${LLM_USE_GPU:-false}
+      TTS_SERVER_URL: http://tts:5002
+      VC_SERVER_URL: http://vc:5003
     volumes:
-      - .:/app
-      - db_volume:/app/db
-      - staticfiles_volume:/app/staticfiles
-      - data_volume:/app/data
-      # Mount your models directory from host
-      - /home/npc/Documents/Fine-tune-LLM/models:/app/models
+      - django_runtime:/app/runtime
+      - staticfiles:/app/staticfiles
+      - pipeline_data:/app/data
+      - media_data:/app/media
+      - type: bind
+        source: ${EMBEDDING_MODEL_PATH_HOST:-./models/sentence_embeddings}
+        target: /models/sentence_embeddings
+        read_only: true
     ports:
-      - "8000:8000"
+      - "${DJANGO_PORT:-8000}:8000"
     depends_on:
       redis:
         condition: service_healthy
-    environment:
-      - DJANGO_SETTINGS_MODULE=MetaRangNPC.settings
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-/app/models/sentence_embeddings}
-    restart: unless-stopped
+      livekit:
+        condition: service_started
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/admin/login/').read()"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live/', timeout=2).read()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 45s
+    restart: unless-stopped
+
+  stt:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.stt
+    environment:
+      <<: *observability-env
+      WHISPER_MODEL: ${WHISPER_MODEL:-turbo}
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-auto}
+      STT_QUEUE_SIZE: ${STT_QUEUE_SIZE:-8}
+      STT_INFERENCE_WORKERS: ${STT_INFERENCE_WORKERS:-1}
+      XDG_CACHE_HOME: /cache
+    volumes:
+      - stt_cache:/cache
+    expose: ["5001"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/health/ready', timeout=2).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:0.32.5
+    volumes:
+      - ollama_data:/root/.ollama
+    expose: ["11434"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  llm:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.llm
+    environment:
+      <<: *observability-env
+      DATA_ROOT: /app/data
+      OLLAMA_BASE_URL: http://ollama:11434
+      OLLAMA_REQUEST_TIMEOUT_SECONDS: ${OLLAMA_REQUEST_TIMEOUT_SECONDS:-180}
+      LLM_MODEL: ${LLM_MODEL:-dorna2}
+      LLM_USE_GPU: ${LLM_USE_GPU:-false}
+      EMBEDDING_MODEL_PATH: /models/sentence_embeddings
+      LLM_MAX_CONCURRENT_REQUESTS: ${LLM_MAX_CONCURRENT_REQUESTS:-2}
+      LLM_STREAM_QUEUE_SIZE: ${LLM_STREAM_QUEUE_SIZE:-32}
+    volumes:
+      - pipeline_data:/app/data
+      - type: bind
+        source: ${EMBEDDING_MODEL_PATH_HOST:-./models/sentence_embeddings}
+        target: /models/sentence_embeddings
+        read_only: true
+    expose: ["5004"]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5004/health/ready', timeout=2).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+
+  tts:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.tts
+    environment:
+      <<: *observability-env
+      TTS_HOST: 0.0.0.0
+      TTS_MODEL_PATH: /models/tts.pth
+      TTS_CONFIG_PATH: /app/TTS/config.json
+      NUMBA_CACHE_DIR: /tmp/numba-cache
+      MPLCONFIGDIR: /tmp/matplotlib
+    volumes:
+      - type: bind
+        source: ${TTS_MODEL_PATH_HOST:-./TTS/best_model_91323.pth}
+        target: /models/tts.pth
+        read_only: true
+    expose: ["5002"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5002/health/ready', timeout=2).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 180s
+    restart: unless-stopped
+
+  vc:
+    profiles: ["voice-conversion"]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.vc
+    environment:
+      <<: *observability-env
+      VC_HOST: 0.0.0.0
+      VC_HPFILE: /app/VC/configs/freevc.json
+      VC_PTFILE: /models/freevc.pth
+      VC_WAVLM_PATH: /models/WavLM-Large.pt
+      VC_SPK_CKPT: /models/speaker-encoder.pt
+      VC_SAMPLES_DIR: /app/media/voice_samples
+      NUMBA_CACHE_DIR: /tmp/numba-cache
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - media_data:/app/media
+      - type: bind
+        source: ${VC_MODEL_PATH_HOST:-./VC/freevc.pth}
+        target: /models/freevc.pth
+        read_only: true
+      - type: bind
+        source: ${VC_WAVLM_PATH_HOST:-./VC/wavlm/WavLM-Large.pt}
+        target: /models/WavLM-Large.pt
+        read_only: true
+      - type: bind
+        source: ${VC_SPEAKER_ENCODER_PATH_HOST:-./VC/speaker_encoder/ckpt/pretrained_bak_5805000.pt}
+        target: /models/speaker-encoder.pt
+        read_only: true
+    expose: ["5003"]
+    runtime: nvidia
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5003/health/ready', timeout=2).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 20
+      start_period: 240s
+    restart: unless-stopped
+
+  agent-worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    environment:
+      <<: *observability-env
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      LIVEKIT_AGENT_NAME: ${LIVEKIT_AGENT_NAME:-metarang-agent}
+      STT_SERVER_URL: http://stt:5001
+      LLM_SERVER_URL: http://llm:5004
+      TTS_SERVER_URL: http://tts:5002
+      VC_SERVER_URL: http://vc:5003
+      VC_FAILURE_FALLBACK: ${VC_FAILURE_FALLBACK:-true}
+      SPEECH_THRESHOLD_DBFS: ${SPEECH_THRESHOLD_DBFS:-38}
+      SPEECH_END_SILENCE_MS: ${SPEECH_END_SILENCE_MS:-900}
+      SENTENCE_QUEUE_SIZE: ${SENTENCE_QUEUE_SIZE:-2}
+      PARTICIPANT_WAIT_TIMEOUT_SECONDS: ${PARTICIPANT_WAIT_TIMEOUT_SECONDS:-45}
+      AGENT_METRICS_PORT: 9090
+    expose: ["8081", "9090"]
+    depends_on:
+      livekit:
+        condition: service_started
+      stt:
+        condition: service_healthy
+      llm:
+        condition: service_healthy
+      tts:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',8081),2); s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.159.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./deploy/observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    expose: ["4317", "4318", "8888", "8889", "13133"]
+    depends_on:
+      - tempo
+      - loki
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v3.10.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    volumes:
+      - ./deploy/observability/prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9091}:9090"
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.10.7
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./deploy/observability/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo_data:/var/tempo
+    expose: ["3200", "4317", "4318"]
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.7.2
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./deploy/observability/loki.yaml:/etc/loki/local-config.yaml:ro
+      - loki_data:/loki
+    expose: ["3100"]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:13.1.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.30.4-alpine
+    profiles: ["production"]
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+      LIVEKIT_DOMAIN: ${LIVEKIT_DOMAIN}
+      LIVEKIT_UPSTREAM: ${LIVEKIT_UPSTREAM:-livekit:7880}
+    volumes:
+      - ./deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ${TLS_CERTS_DIR:-./certs}:/certs:ro
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - web
+      - livekit
+    restart: unless-stopped
 
   celery-worker:
+    profiles: ["training"]
     build: .
-    command: celery -A MetaRangNPC worker --loglevel=info --pool=solo
+    command: ["celery", "-A", "MetaRangNPC", "worker", "--loglevel=info", "--pool=solo"]
+    environment:
+      DJANGO_SETTINGS_MODULE: MetaRangNPC.settings
+      DATABASE_PATH: /app/runtime/db.sqlite3
+      DATA_ROOT: /app/data
+      MEDIA_ROOT: /app/media
+      REDIS_URL: redis://redis:6379/0
+      RUN_DJANGO_MIGRATIONS: "false"
+      RUN_COLLECTSTATIC: "false"
     volumes:
-      - .:/app
-      - db_volume:/app/db
-      - data_volume:/app/data
-      - /home/npc/Documents/Fine-tune-LLM/models:/app/models
+      - django_runtime:/app/runtime
+      - pipeline_data:/app/data
+      - media_data:/app/media
     depends_on:
       redis:
         condition: service_healthy
-      web:
-        condition: service_healthy
-    environment:
-      - DJANGO_SETTINGS_MODULE=MetaRangNPC.settings
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-/app/models/sentence_embeddings}
-    restart: unless-stopped
-
-  celery-beat:
-    build: .
-    command: celery -A MetaRangNPC beat --loglevel=info
-    volumes:
-      - .:/app
-      - db_volume:/app/db
-      - data_volume:/app/data
-      - /home/npc/Documents/Fine-tune-LLM/models:/app/models
-    depends_on:
-      redis:
-        condition: service_healthy
-      web:
-        condition: service_healthy
-    environment:
-      - DJANGO_SETTINGS_MODULE=MetaRangNPC.settings
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-/app/models/sentence_embeddings}
-    restart: unless-stopped
-
-  flower:
-    build: .
-    command: celery -A MetaRangNPC flower --port=5555
-    ports:
-      - "5555:5555"
-    depends_on:
-      redis:
-        condition: service_healthy
-      web:
-        condition: service_healthy
-    environment:
-      - DJANGO_SETTINGS_MODULE=MetaRangNPC.settings
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
-      - EMBEDDING_MODEL_PATH=${EMBEDDING_MODEL_PATH:-/app/models/sentence_embeddings}
     restart: unless-stopped
 
 volumes:
-  db_volume:
   redis_data:
-  staticfiles_volume:
-  data_volume:
+  django_runtime:
+  staticfiles:
+  pipeline_data:
+  media_data:
+  stt_cache:
+  ollama_data:
+  prometheus_data:
+  tempo_data:
+  loki_data:
+  grafana_data:

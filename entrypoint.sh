@@ -1,14 +1,13 @@
 #!/bin/sh
+set -eu
 
-# Create db directory if it doesn't exist
-mkdir -p /app/db
+mkdir -p "$(dirname "${DATABASE_PATH:-/app/runtime/db.sqlite3}")" /app/staticfiles /app/data /app/media
 
-# Apply migrations
-python manage.py migrate
-
-# Collect static files
-python manage.py collectstatic --noinput
-
-python manage.py runserver 
+if [ "${RUN_DJANGO_MIGRATIONS:-true}" = "true" ]; then
+    python manage.py migrate --noinput
+fi
+if [ "${RUN_COLLECTSTATIC:-true}" = "true" ]; then
+    python manage.py collectstatic --noinput
+fi
 
 exec "$@"
