@@ -20,7 +20,7 @@ logger = logging
 
 
 def get_cmodel(rank):
-    checkpoint = torch.load('wavlm/WavLM-Large.pt')
+    checkpoint = torch.load(os.environ.get('VC_WAVLM_PATH', 'wavlm/WavLM-Large.pt'))
     cfg = WavLMConfig(checkpoint['cfg'])
     cmodel = WavLM(cfg).cuda(rank)
     cmodel.load_state_dict(checkpoint['model'])

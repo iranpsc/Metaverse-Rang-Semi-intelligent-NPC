@@ -8,6 +8,11 @@ venv/
 env/
 ENV/
 .venv
+**/venv/
+**/env/
+**/.venv/
+TTS/tts/
+VC/freevc-env/
 
 # Django
 *.log
@@ -40,9 +45,18 @@ docker-compose.yml
 
 # Data directories (should be mounted as volumes)
 data/
+models/
+certs/
+
+# Model checkpoints are always mounted or downloaded into named volumes at runtime.
+**/*.pt
+**/*.pth
+**/*.ckpt
+**/*.bin
+**/*.onnx
+**/*.safetensors
 
 # Build artifacts
 *.egg-info/
 dist/
 build/
-

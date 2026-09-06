@@ -13,4 +13,8 @@ from django.core.wsgi import get_wsgi_application
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "MetaRangNPC.settings")
 
+from pipeline_core.observability import configure_observability
+
+configure_observability("django")
+
 application = get_wsgi_application()

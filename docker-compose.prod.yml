@@ -1,0 +1,46 @@
+services:
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  livekit:
+    network_mode: host
+    ports: []
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      NODE_IP: ${LIVEKIT_NODE_IP}
+      LIVEKIT_TURN_DOMAIN: ${LIVEKIT_TURN_DOMAIN}
+      LIVEKIT_TURN_CERT: /certs/turn/fullchain.pem
+      LIVEKIT_TURN_KEY: /certs/turn/privkey.pem
+    volumes:
+      - ./deploy/livekit/livekit.prod.yaml:/etc/livekit.yaml:ro
+      - ${TLS_CERTS_DIR}:/certs:ro
+
+  web:
+    ports: []
+    environment:
+      DJANGO_DEBUG: "false"
+      LIVEKIT_URL: wss://${LIVEKIT_DOMAIN}
+      LIVEKIT_API_URL: http://host.docker.internal:7880
+      CORS_ALLOW_ALL_ORIGINS: "false"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  agent-worker:
+    environment:
+      LIVEKIT_URL: ws://host.docker.internal:7880
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  prometheus:
+    volumes:
+      - ./deploy/observability/prometheus.prod.yaml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  nginx:
+    environment:
+      LIVEKIT_UPSTREAM: host.docker.internal:7880
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

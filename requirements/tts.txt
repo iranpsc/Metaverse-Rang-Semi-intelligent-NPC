@@ -1,0 +1,3 @@
+-r observability.txt
+numpy==1.26.4
+TTS==0.22.0

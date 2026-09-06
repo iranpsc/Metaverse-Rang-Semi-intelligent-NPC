@@ -1,31 +1,26 @@
-# فایل: config.py
+"""Environment-driven settings for the existing RAG implementation."""
+
+import os
+
 
 CONFIG = {
-    # --- بخش مدل زبان (LLM) ---
-    'LLM_MODEL': 'dorna2',
-    'OLLAMA_BASE_URL': 'http://localhost:11434',
-    
-    # --- بخش مدل Embedding ---
-    # مسیر دقیق مدل امبدینگ روی سرور شما
-    'EMBEDDING_MODEL': '/home/npc/Documents/Fine-tune-LLM/models/sentence_embeddings',
-    'USE_GPU': True,               # اگر گرافیک دارید True بگذارید تا سرعت ایندکس و پاسخ‌دهی بالا برود
-    'EMBEDDING_BATCH_SIZE': 256,   # تعداد جملاتی که همزمان به وکتور تبدیل می‌شوند
-    'NORMALIZE_EMBEDDINGS': True,  # برای جستجوی Cosine Similarity بهتر است True باشد
-    
-    # --- بخش پارامترهای جستجو (RAG Retrieval) ---
-    'SEARCH_TYPE': 'similarity',
-    'TOP_K_RESULTS': 3,            # چند تا تکه متن مرتبط از دیتابیس پیدا شود؟ (۳ تا معمولاً تعادل خوبی است)
-
-    # --- بخش پارامترهای تولید متن (Generation) ---
-    'TEMPERATURE': 0.1,            # دمای پایین (0.1) برای پاسخ‌های دقیق و بدون توهم
-    'NUM_PREDICT': 512,            # حداکثر طول پاسخ مدل (کمی بیشتر کردم تا پاسخ نصفه نماند)
-    'REPEAT_PENALTY': 1.1,         # جریمه برای جلوگیری از تکرار جملات
-    'TOP_K': 10,
-    'TOP_P': 0.5,
-
-    # --- توکن‌های توقف (Stop Tokens) ---
-    # لیست کلماتی که اگر مدل تولید کرد، بلافاصله باید ساکت شود
-    'STOP_TOKENS': [
+    "LLM_MODEL": os.getenv("LLM_MODEL", "dorna2"),
+    "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
+    "OLLAMA_REQUEST_TIMEOUT_SECONDS": float(
+        os.getenv("OLLAMA_REQUEST_TIMEOUT_SECONDS", "180")
+    ),
+    "EMBEDDING_MODEL": os.getenv("EMBEDDING_MODEL_PATH", "/models/sentence_embeddings"),
+    "USE_GPU": os.getenv("LLM_USE_GPU", "true").lower() in {"1", "true", "yes"},
+    "EMBEDDING_BATCH_SIZE": int(os.getenv("EMBEDDING_BATCH_SIZE", "256")),
+    "NORMALIZE_EMBEDDINGS": True,
+    "SEARCH_TYPE": "similarity",
+    "TOP_K_RESULTS": int(os.getenv("RAG_TOP_K_RESULTS", "3")),
+    "TEMPERATURE": float(os.getenv("LLM_TEMPERATURE", "0.1")),
+    "NUM_PREDICT": int(os.getenv("LLM_NUM_PREDICT", "512")),
+    "REPEAT_PENALTY": float(os.getenv("LLM_REPEAT_PENALTY", "1.1")),
+    "TOP_K": int(os.getenv("LLM_TOP_K", "10")),
+    "TOP_P": float(os.getenv("LLM_TOP_P", "0.5")),
+    "STOP_TOKENS": [
         "[END]",
         "User:",
         "Question:",
@@ -35,12 +30,9 @@ CONFIG = {
         "سوال:",
         "سوال:**",
         "سوال:** ",
-        "سوال:** ",
         "---",
         "\nUser",
-        "\nQuestion"
+        "\nQuestion",
     ],
-    
-    # --- بخش حافظه (Memory) ---
-    'ENABLE_MEMORY': True,         # آیا تاریخچه مکالمه در پرامپت لحاظ شود؟
+    "ENABLE_MEMORY": os.getenv("ENABLE_MEMORY", "true").lower() in {"1", "true", "yes"},
 }

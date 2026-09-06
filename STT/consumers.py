@@ -60,12 +60,12 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
                 print(f"INFO: WebSocket using GPU (CUDA) for Whisper model")
             else:
                 print(f"INFO: WebSocket using CPU for Whisper model (CUDA not available)")
-            
+
+            loop = asyncio.get_running_loop()
             model_path = os.path.join(
                 os.path.dirname(__file__), "model", "Tiny.pt")
             if os.path.exists(model_path):
                 # Run model loading in thread pool to avoid blocking
-                loop = asyncio.get_event_loop()
                 self.whisper_model = await loop.run_in_executor(
                     None, whisper.load_model, model_path, device
                 )
@@ -168,7 +168,7 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
 
     async def process_audio_chunk(self, chunk_data):
         """Process a chunk of audio data"""
-        if not self.whisper_model or not self.audio_buffer:
+        if not self.whisper_model or not chunk_data:
             return
         # Ensure chunk size is valid
         if len(chunk_data) % 2 != 0:  # Must be multiple of 2 for 16-bit audio
@@ -177,12 +177,10 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
 
         try:
             # Convert bytes to AudioSegment
-            audio_segment = self.bytes_to_audio_segment(self.audio_buffer)
+            audio_segment = self.bytes_to_audio_segment(chunk_data)
 
             # Check if audio has enough energy (not just silence)
             if audio_segment.dBFS < self.silence_threshold:
-                # Clear buffer and return if audio is too quiet
-                self.audio_buffer = b''
                 return
 
             # Split audio into sentences based on silence
@@ -202,8 +200,6 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
                                 'timestamp': sentence_audio.duration_seconds
                             }))
 
-                # Clear buffer after processing
-                self.audio_buffer = b''
             else:
                 # If no sentences detected, process the whole chunk
                 transcription = await self.transcribe_audio(audio_segment)
@@ -215,14 +211,12 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
                         'total_sentences': 1,
                         'timestamp': audio_segment.duration_seconds
                     }))
-                self.audio_buffer = b''
 
         except Exception as e:
             await self.send(text_data=json.dumps({
                 'type': 'error',
                 'message': f'Error processing audio chunk: {str(e)}'
             }))
-            self.audio_buffer = b''
 
     async def process_complete_audio(self):
         """Process the complete audio buffer"""

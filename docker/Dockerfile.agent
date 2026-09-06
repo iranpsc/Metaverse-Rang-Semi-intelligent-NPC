@@ -1,0 +1,18 @@
+FROM python:3.11.16-slim-bookworm AS builder
+WORKDIR /build
+COPY requirements requirements
+RUN pip wheel --wheel-dir /wheels -r requirements/agent.txt
+
+FROM python:3.11.16-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
+RUN groupadd --system app && useradd --system --gid app --home /app app
+COPY --from=builder /wheels /wheels
+COPY requirements requirements
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements/agent.txt && rm -rf /wheels
+WORKDIR /app
+COPY --chown=app:app pipeline_core pipeline_core
+COPY --chown=app:app realtime_agent realtime_agent
+COPY --chown=app:app scripts scripts
+USER app
+EXPOSE 8081 9090
+CMD ["python", "-m", "realtime_agent.worker", "start"]

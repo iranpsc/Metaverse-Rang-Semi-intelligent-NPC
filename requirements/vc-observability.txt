@@ -1,0 +1,5 @@
+# Install after VC/requirements.txt inside the legacy FreeVC-compatible image.
+prometheus-client==0.22.1
+opentelemetry-api==1.28.2
+opentelemetry-sdk==1.28.2
+opentelemetry-exporter-otlp-proto-grpc==1.28.2

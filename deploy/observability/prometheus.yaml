@@ -1,0 +1,41 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: livekit
+    static_configs:
+      - targets: ["livekit:6789"]
+
+  - job_name: django
+    metrics_path: /api/v1/metrics/
+    static_configs:
+      - targets: ["web:8000"]
+
+  - job_name: stt
+    static_configs:
+      - targets: ["stt:5001"]
+
+  - job_name: llm-rag
+    static_configs:
+      - targets: ["llm:5004"]
+
+  - job_name: tts
+    static_configs:
+      - targets: ["tts:5002"]
+
+  - job_name: voice-conversion
+    static_configs:
+      - targets: ["vc:5003"]
+
+  - job_name: agent-worker
+    static_configs:
+      - targets: ["agent-worker:9090"]
+
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8888", "otel-collector:8889"]

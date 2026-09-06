@@ -1,0 +1,20 @@
+FROM python:3.11.16-slim-bookworm AS builder
+WORKDIR /build
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential && rm -rf /var/lib/apt/lists/*
+COPY requirements requirements
+RUN pip wheel --wheel-dir /wheels -r requirements/llm.txt
+
+FROM python:3.11.16-slim-bookworm
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PYTHONPATH=/app
+RUN groupadd --system app && useradd --system --gid app --home /app app
+COPY --from=builder /wheels /wheels
+COPY requirements requirements
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements/llm.txt && rm -rf /wheels
+WORKDIR /app
+COPY --chown=app:app LLM LLM
+COPY --chown=app:app pipeline_core pipeline_core
+COPY --chown=app:app services services
+RUN mkdir -p /app/data && chown -R app:app /app/data
+USER app
+EXPOSE 5004
+CMD ["uvicorn", "services.llm_server:app", "--host", "0.0.0.0", "--port", "5004", "--no-access-log", "--limit-concurrency", "16"]

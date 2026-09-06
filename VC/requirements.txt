@@ -2,6 +2,10 @@ glob2==0.7
 tqdm==4.62.3
 librosa==0.8.1
 numpy==1.21.6
+numba==0.56.4
+llvmlite==0.39.1
 scipy==1.7.2
+scikit-learn==1.6.1
+SoundFile==0.10.3.post1
 tensorboard==2.7.0
 webrtcvad==2.0.10

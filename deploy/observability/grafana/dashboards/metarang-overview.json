@@ -1,0 +1,57 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Active agent jobs",
+      "gridPos": {"h": 7, "w": 6, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(metarang_agent_active_jobs)", "legendFormat": "jobs"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Speech end to first AI audio (p95)",
+      "gridPos": {"h": 7, "w": 9, "x": 6, "y": 0},
+      "targets": [{"expr": "histogram_quantile(0.95, sum(rate(metarang_agent_speech_end_to_first_audio_seconds_bucket[5m])) by (le))", "legendFormat": "p95"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Pipeline stage p95 latency",
+      "gridPos": {"h": 7, "w": 9, "x": 15, "y": 0},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum(rate(metarang_stt_duration_seconds_bucket[5m])) by (le))", "legendFormat": "STT"},
+        {"expr": "histogram_quantile(0.95, sum(rate(metarang_llm_duration_seconds_bucket[5m])) by (le))", "legendFormat": "LLM/RAG"},
+        {"expr": "histogram_quantile(0.95, sum(rate(metarang_tts_duration_seconds_bucket[5m])) by (le))", "legendFormat": "TTS"},
+        {"expr": "histogram_quantile(0.95, sum(rate(metarang_vc_duration_seconds_bucket[5m])) by (le))", "legendFormat": "VC"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "LiveKit rooms and participants",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 7},
+      "targets": [
+        {"expr": "sum(livekit_room_total)", "legendFormat": "rooms"},
+        {"expr": "sum(livekit_participant_total)", "legendFormat": "participants"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors and backpressure",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 7},
+      "targets": [
+        {"expr": "sum(rate(metarang_agent_turns_total{result=\"error\"}[5m]))", "legendFormat": "turn errors"},
+        {"expr": "sum(rate(metarang_stt_requests_total{result=\"backpressured\"}[5m]))", "legendFormat": "STT backpressure"},
+        {"expr": "sum(metarang_stt_queue_depth)", "legendFormat": "STT queue"}
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 41,
+  "tags": ["metarang", "livekit"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timezone": "browser",
+  "title": "MetaRang Realtime Pipeline",
+  "uid": "metarang-realtime",
+  "version": 1
+}

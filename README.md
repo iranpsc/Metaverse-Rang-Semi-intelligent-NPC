@@ -1,1069 +1,225 @@
-# 🤖 MetaRang Semi-Intelligent NPC
+# MetaRang realtime avatar backend
 
-> Backend infrastructure for **semi-intelligent NPCs** in the MetaRang Metaverse, combining **LLM-powered conversation, RAG, speech-to-text, text-to-speech, background task processing, and real-time WebSocket communication with Unity**.
+MetaRang exposes the existing Whisper → RAG/LLM → Coqui TTS → optional FreeVC pipeline as one self-hosted LiveKit participant. Django is the control plane; microphone and response audio never travel through Django REST.
 
-[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python\&logoColor=white)](https://www.python.org/)
-[![Django](https://img.shields.io/badge/Django-5.x-092E20?logo=django\&logoColor=white)](https://www.djangoproject.com/)
-[![WebSocket](https://img.shields.io/badge/WebSocket-Realtime-010101?logo=socketdotio\&logoColor=white)](https://developer.mozilla.org/en-US/docs/Web/API/WebSockets_API)
-[![Redis](https://img.shields.io/badge/Redis-7-DC382D?logo=redis\&logoColor=white)](https://redis.io/)
-[![Celery](https://img.shields.io/badge/Celery-5.3-37814A?logo=celery\&logoColor=white)](https://docs.celeryq.dev/)
-[![Docker](https://img.shields.io/badge/Docker-Supported-2496ED?logo=docker\&logoColor=white)](https://www.docker.com/)
-
----
-
-## 📌 Overview
-
-**MetaRang Semi-Intelligent NPC** is the backend service responsible for powering AI-assisted NPCs inside the MetaRang virtual environment.
-
-The project provides the infrastructure required to connect a virtual NPC to AI and speech services:
+## Architecture
 
 ```text
-                    ┌──────────────────────┐
-                    │   MetaRang / Unity   │
-                    │       Client         │
-                    └──────────┬───────────┘
-                               │
-                         WebSocket / HTTP
-                               │
-                               ▼
-                    ┌──────────────────────┐
-                    │   Django / ASGI      │
-                    │      Backend         │
-                    └──────────┬───────────┘
-                               │
-             ┌─────────────────┼─────────────────┐
-             │                 │                 │
-             ▼                 ▼                 ▼
-       ┌───────────┐     ┌───────────┐     ┌───────────┐
-       │    STT    │     │    LLM    │     │    TTS    │
-       │  Whisper  │     │ AI / RAG  │     │  Speech   │
-       └───────────┘     └─────┬─────┘     └───────────┘
-                               │
-                         ┌─────▼─────┐
-                         │  Vector   │
-                         │ Retrieval │
-                         └───────────┘
+Unity client
+  │ POST /api/v1/agent/sessions/       (control only)
+  ▼
+Django ──creates room + explicit dispatch──► self-hosted LiveKit ◄──► Redis DB 1
+                                                    │ WebRTC
+                                  ┌─────────────────┴─────────────────┐
+                                  │ agent-worker (LiveKit participant) │
+                                  └───┬────────────┬────────────┬──────┘
+                                      │            │            │
+                                PCM16 16 kHz   streamed text  sentence WAV
+                                      ▼            ▼            ▼
+                                  Whisper      RAG + Ollama    Coqui TTS
+                                                                    │
+                                                          optional FreeVC
+                                                                    │
+                                      LiveKit audio, PCM16 mono 48 kHz
+                                                                    ▼
+                                                               Unity client
 
-                    ┌──────────────────────┐
-                    │ Redis + Celery       │
-                    │ Background Tasks     │
-                    └──────────────────────┘
+All services ── structured stdout + OTLP traces + /metrics ──►
+OpenTelemetry Collector ──► Loki / Tempo    Prometheus ──► Grafana
 ```
 
-The backend is designed around **real-time interaction** between the virtual world and AI-driven NPC services.
+The existing model implementations remain in `STT`, `LLM`, `TTS`, and `VC`. The new internal STT and LLM HTTP adapters do not expose public ports. `realtime_agent` is the only AI component coupled to LiveKit.
 
----
+### Audio path
 
-# ✨ Features
+1. Unity publishes its LiveKit microphone track. WebRTC/Opus transport is decoded by the LiveKit SDK.
+2. The agent requests mono, 16-bit, 16 kHz, 20 ms PCM frames and holds them in a bounded 500-frame SDK ring.
+3. A non-semantic energy/silence endpoint creates one utterance in memory. No temporary audio file is written.
+4. Whisper receives raw PCM16 and returns its final utterance transcript.
+5. RAG retrieval and Ollama generation stream text tokens. A two-item bounded sentence queue lets TTS start before the whole answer is complete.
+6. The current Coqui and FreeVC implementations return one WAV per sentence; they are not chunk-streaming providers. If enabled, FreeVC converts the sentence WAV. This is the remaining full-buffer audio boundary.
+7. The agent explicitly decodes PCM16 WAV, downmixes if needed, resamples to mono 48 kHz, splits it into 20 ms frames, and publishes the `agent-audio` LiveKit track.
 
-## 🧠 LLM Integration
+There is intentionally no semantic endpointing or barge-in. Microphone frames received while the agent is processing/speaking are discarded.
 
-The project contains an `LLM` application responsible for AI-related functionality.
+## Local startup
 
-The dependency stack includes components such as:
+Requirements: Docker Engine with Compose v2, enough disk/RAM for the models, and NVIDIA Container Toolkit if voice conversion is enabled.
 
-* LangChain
-* LangChain Community
-* LangChain HuggingFace
-* LangChain Ollama
-* Transformers
-* Hugging Face Hub
-* Sentence Transformers
-* ChromaDB
-* FAISS
-* Ollama
-* PyTorch
-
-This provides the foundation for connecting NPC behavior and conversation to local or externally hosted language models.
-
----
-
-## 🔎 RAG & Semantic Retrieval
-
-The project includes the dependencies required for retrieval-augmented generation and semantic search.
-
-The stack includes:
-
-* ChromaDB
-* FAISS
-* Sentence Transformers
-* Hugging Face models
-* LangChain
-* Embedding models
-
-This allows NPC responses to be enhanced with contextual information instead of relying only on the language model's internal knowledge.
-
-A typical conceptual flow is:
-
-```text
-User / Player
-     │
-     ▼
-NPC Message
-     │
-     ▼
-Query Processing
-     │
-     ▼
-Embedding
-     │
-     ▼
-Vector Search
-     │
-     ▼
-Relevant Context
-     │
-     ▼
-LLM
-     │
-     ▼
-NPC Response
+```bash
+cp .env.example .env
 ```
 
----
+Set a LiveKit secret of at least 32 random characters, for example:
 
-# 🎙️ Speech-to-Text
-
-The `STT` application provides real-time speech transcription using **Whisper**.
-
-The project exposes a WebSocket endpoint:
-
-```text
-/ws/audio-transcription/
+```bash
+openssl rand -hex 32
 ```
 
-The audio pipeline supports:
+Then edit `.env` and point the model variables at real host paths. In particular:
 
-* Real-time audio streaming
-* Audio chunking
-* Silence detection
-* Sentence segmentation
-* Whisper transcription
-* Incremental transcription messages
-* Complete transcription messages
-* Unity integration
+- `EMBEDDING_MODEL_PATH_HOST` must contain the sentence-transformer model.
+- `TTS_MODEL_PATH_HOST` must contain the Coqui checkpoint matching `TTS/config.json`.
+- the three `VC_*_PATH_HOST` values must exist when using FreeVC.
+- `LLM_MODEL` must already exist in the Ollama volume. For a registry model, run `docker compose exec ollama ollama pull <model>` after Ollama starts. For the existing custom `dorna2`, create/import it using the project’s original Ollama model workflow.
 
-The expected audio format is:
+Start without the optional CUDA-only FreeVC service:
 
-| Property    | Value     |
-| ----------- | --------- |
-| Sample Rate | 16,000 Hz |
-| Channels    | Mono      |
-| Bit Depth   | 16-bit    |
-| Encoding    | PCM       |
-
-The WebSocket implementation uses approximately 1-second chunks and supports configurable silence detection.
-
----
-
-# 🔊 Text-to-Speech
-
-The `TTS` component provides the speech-generation layer for NPC responses.
-
-The Django configuration exposes the TTS service through:
-
-```text
-TTS_SERVER_URL
+```bash
+make up
+make health
 ```
 
-The default local configuration points to:
+Start the complete voice-conversion path on an NVIDIA host:
 
-```text
-http://127.0.0.1:5002
+```bash
+make up-with-vc
 ```
 
-This allows the speech-generation service to run independently from the main Django application.
+Useful endpoints:
 
----
+| Purpose | URL |
+|---|---|
+| Swagger UI | `http://localhost:8000/api/docs/` |
+| OpenAPI schema | `http://localhost:8000/api/schema/` |
+| Django liveness/readiness | `http://localhost:8000/api/v1/health/live/`, `/ready/` |
+| LiveKit signaling | `ws://localhost:7880` |
+| Grafana | `http://localhost:3000` |
+| Prometheus | `http://localhost:9091` |
 
-# 🔌 Real-Time WebSocket Communication
+Internal model ports are exposed only to the Compose network.
 
-Real-time communication is implemented using:
+## Session API
 
-* Django Channels
-* ASGI
-* Redis Channel Layer
-* WebSocket
+This first integration phase is intentionally unauthenticated. Do not expose it to an untrusted network until authentication and rate limiting are added.
 
-This is particularly important for the Unity integration, where the NPC needs to communicate without relying exclusively on traditional request/response HTTP APIs.
+```http
+POST /api/v1/agent/sessions/
+Content-Type: application/json
 
-The repository also contains:
-
-* `UnityWebSocketClient.cs`
-* WebSocket test clients
-* Browser-based WebSocket test interface
-* Nginx WebSocket configuration documentation
-
-The documented audio WebSocket endpoint is:
-
-```text
-ws://localhost:8000/ws/audio-transcription/
-```
-
-The API supports commands such as:
-
-```json
 {
-  "command": "start_recording"
+  "user_id": "player-42",
+  "vector_store": "main_store",
+  "enable_voice_conversion": false
 }
 ```
 
-```json
-{
-  "command": "stop_recording"
-}
-```
+For voice conversion, set `enable_voice_conversion` to `true` and provide an existing Django `voice_sample_id`.
 
 ```json
 {
-  "command": "get_status"
+  "session_id": "2e24ec36-1000-4bd1-88e7-5ab66a216cc0",
+  "room_name": "agent-session-2e24ec3610004bd188e7",
+  "livekit_url": "ws://localhost:7880",
+  "access_token": "<short-lived JWT>",
+  "expires_at": "2026-09-01T12:10:00Z"
 }
 ```
 
-and returns structured events such as:
+The token is server-signed, room-scoped, can subscribe, and can publish only a microphone source. It cannot publish data, administer rooms, or expose the API secret. The default TTL is ten minutes. Django creates a two-participant room and explicitly dispatches `metarang-agent` before returning.
+
+Close a session early with:
+
+```http
+DELETE /api/v1/agent/sessions/{session_id}/
+```
+
+The complete Unity-facing contract is in [docs/UNITY_LIVEKIT_CONTRACT.md](docs/UNITY_LIVEKIT_CONTRACT.md).
+
+## Realtime events
+
+Events use LiveKit text streams on topic `metarang.events.v1`. Every payload has `version: 1`.
 
 ```json
 {
   "type": "transcription",
-  "text": "Hello, this is a test sentence.",
-  "sentence_index": 0,
-  "total_sentences": 2,
-  "timestamp": 1.5
+  "version": 1,
+  "session_id": "...",
+  "turn_id": "...",
+  "speaker": "user",
+  "text": "hello world",
+  "final": true,
+  "timestamp": 1788264000.123
 }
 ```
 
-A final transcription can be returned using:
+Agent transcript updates use the same schema with `speaker: "agent"`; they may be partial (`final: false`) and always end with a final event. The current Whisper integration is utterance-based, so user events are final-only. It was not replaced merely to manufacture partial results.
+
+State and failure events are also sent on the same topic:
 
 ```json
-{
-  "type": "complete_transcription",
-  "text": "Hello, this is a test sentence. This is another sentence.",
-  "total_sentences": 2
-}
+{"type":"pipeline_state","version":1,"session_id":"...","turn_id":"...","state":"thinking","timestamp":1788264000.2}
 ```
-
----
-
-# ⚙️ Background Processing
-
-The project uses **Celery** with **Redis** as the broker/result backend.
-
-The Docker Compose configuration provides separate services for:
-
-```text
-web
-redis
-celery-worker
-celery-beat
-flower
-```
-
-This allows background operations and scheduled jobs to be separated from the main web server.
-
-### Celery Worker
-
-Processes asynchronous tasks.
-
-### Celery Beat
-
-Runs scheduled/background tasks.
-
-### Flower
-
-Provides a monitoring interface for Celery workers and tasks.
-
-The default Flower port is:
-
-```text
-5555
-```
-
----
-
-# 🏗️ Project Structure
-
-The main repository is organized around the following components:
-
-```text
-Metaverse-Rang-Semi-intelligent-NPC/
-│
-├── .github/
-│   └── workflows/
-│
-├── LLM/
-│   └── LLM and RAG functionality
-│
-├── MetaRangNPC/
-│   ├── settings.py
-│   ├── urls.py
-│   ├── asgi.py
-│   └── wsgi.py
-│
-├── STT/
-│   └── Speech-to-Text / Whisper
-│
-├── TTS/
-│   └── Text-to-Speech service
-│
-├── VC/
-│   └── Voice Conversion components
-│
-├── staticfiles/
-│   └── Django static assets
-│
-├── UnityWebSocketClient.cs
-│
-├── test_websocket_client.py
-├── test_websocket_simple.py
-│
-├── Dockerfile
-├── docker-compose.yml
-├── entrypoint.sh
-├── manage.py
-├── requirements.txt
-│
-├── WEBSOCKET_API_README.md
-└── NGINX_WEBSOCKET_FIX.md
-```
-
-The repository currently contains 26 commits and the main application directories include `LLM`, `MetaRangNPC`, `STT`, `TTS`, and a voice-conversion component.
-
----
-
-# 🧩 Technology Stack
-
-## Backend
-
-* Python 3.11
-* Django
-* Django Channels
-* ASGI
-* Uvicorn
-
-## AI / LLM
-
-* PyTorch
-* Transformers
-* Hugging Face
-* LangChain
-* Ollama
-* Sentence Transformers
-
-## RAG / Vector Search
-
-* ChromaDB
-* FAISS
-* Embedding Models
-
-## Speech
-
-* OpenAI Whisper
-* PyDub
-* FFmpeg
-* WebSocket audio streaming
-
-## Async Processing
-
-* Celery
-* Redis
-* Flower
-
-## Client Integration
-
-* Unity
-* C#
-* WebSocket
-
-## Infrastructure
-
-* Docker
-* Docker Compose
-* Nginx
-* Redis
-
-The project's dependency file currently includes Django, Channels, Redis, Celery, ChromaDB, FAISS, LangChain, Ollama, Transformers, Sentence Transformers, PyTorch, Whisper and related AI/audio packages.
-
----
-
-# 🚀 Getting Started
-
-## Requirements
-
-Before running the project locally, install:
-
-* Python 3.11+
-* Git
-* Redis
-* FFmpeg
-* Optional: Docker & Docker Compose
-* Optional: Ollama
-* Required AI models depending on the selected LLM/STT configuration
-
-The Docker image is based on Python `3.11.9-slim` and installs FFmpeg and the Python dependencies from `requirements.txt`.
-
----
-
-# 1. Clone the Repository
-
-```bash
-git clone https://github.com/iranpsc/Metaverse-Rang-Semi-intelligent-NPC.git
-
-cd Metaverse-Rang-Semi-intelligent-NPC
-```
-
----
-
-# 2. Create a Virtual Environment
-
-### Linux / macOS
-
-```bash
-python3.11 -m venv venv
-
-source venv/bin/activate
-```
-
-### Windows
-
-```powershell
-py -3.11 -m venv venv
-
-venv\Scripts\activate
-```
-
----
-
-# 3. Install Dependencies
-
-```bash
-pip install --upgrade pip
-
-pip install -r requirements.txt
-```
-
-> **Note:** The dependency list contains several large AI/ML packages. Installation may require significant disk space and, depending on the selected models, a CUDA-compatible GPU may be beneficial.
-
----
-
-# 4. Start Redis
-
-If Redis is installed locally:
-
-```bash
-redis-server
-```
-
-Verify:
-
-```bash
-redis-cli ping
-```
-
-Expected:
-
-```text
-PONG
-```
-
----
-
-# 5. Run Django Migrations
-
-```bash
-python manage.py migrate
-```
-
----
-
-# 6. Start the Backend
-
-For local development:
-
-```bash
-python manage.py runserver
-```
-
-The application will be available at:
-
-```text
-http://localhost:8000
-```
-
-For ASGI/WebSocket deployment, Uvicorn can be used:
-
-```bash
-uvicorn MetaRangNPC.asgi:application --host 0.0.0.0 --port 8000
-```
-
-The repository's Docker configuration uses Uvicorn with the Django ASGI application.
-
----
-
-# 🐳 Docker
-
-Docker Compose is the recommended way to run the complete service stack.
-
-The provided configuration starts:
-
-```text
-Redis
-   │
-   ├── Django / ASGI
-   │
-   ├── Celery Worker
-   │
-   ├── Celery Beat
-   │
-   └── Flower
-```
-
-Start the stack:
-
-```bash
-docker compose up --build
-```
-
-Run in background:
-
-```bash
-docker compose up -d --build
-```
-
-Check running containers:
-
-```bash
-docker compose ps
-```
-
-Stop the services:
-
-```bash
-docker compose down
-```
-
-The current Compose configuration exposes:
-
-| Service       |   Port |
-| ------------- | -----: |
-| Django / ASGI | `8000` |
-| Flower        | `5555` |
-| Redis         | `6379` |
-
----
-
-# 🔐 Environment Configuration
-
-Environment-specific values should be configured through environment variables rather than hard-coded values.
-
-Examples used by the Docker configuration include:
-
-```env
-OLLAMA_BASE_URL=http://host.docker.internal:11434
-
-EMBEDDING_MODEL_PATH=/app/models/sentence_embeddings
-
-TTS_SERVER_URL=http://127.0.0.1:5002
-```
-
-For production, sensitive configuration such as Django's `SECRET_KEY`, database credentials, API keys and service URLs should be provided through environment variables or a secrets-management system.
-
-> **Security note:** the current `settings.py` contains a hard-coded Django secret key and has `DEBUG = True`. These values must be changed before a production deployment.
-
----
-
-# 🧠 LLM Configuration
-
-The project supports an LLM-oriented architecture with integrations including Ollama, Hugging Face, Transformers and LangChain.
-
-When using Ollama, configure:
-
-```env
-OLLAMA_BASE_URL=http://localhost:11434
-```
-
-Inside Docker, the Compose configuration defaults to:
-
-```text
-http://host.docker.internal:11434
-```
-
-The actual model should be configured according to the implementation inside the `LLM` application.
-
----
-
-# 🎤 WebSocket Speech-to-Text API
-
-## Endpoint
-
-```text
-ws://localhost:8000/ws/audio-transcription/
-```
-
-## Connection
-
-A successful connection returns:
 
 ```json
-{
-  "type": "connection_established",
-  "message": "WebSocket connected successfully. Ready to receive audio.",
-  "config": {
-    "sample_rate": 16000,
-    "channels": 1,
-    "chunk_duration_ms": 1000
-  }
-}
+{"type":"pipeline_error","version":1,"session_id":"...","turn_id":"...","stage":"tts","code":"tts_failed","message":"The AI pipeline could not complete this turn.","recoverable":true,"timestamp":1788264000.3}
 ```
 
-## Audio
+State values are `listening`, `transcribing`, `thinking`, `speaking`, and `ready` (reserved). Error messages are deliberately generic; operator logs and traces contain the diagnostic detail without exposing it to clients.
 
-Send raw:
-
-```text
-16-bit PCM
-16 kHz
-Mono
-```
-
-audio data over the WebSocket.
-
-## Status
-
-```json
-{
-  "command": "get_status"
-}
-```
-
-Possible response:
-
-```json
-{
-  "type": "status",
-  "buffer_size": 1024,
-  "model_loaded": true
-}
-```
-
-The complete WebSocket protocol is documented in:
-
-```text
-WEBSOCKET_API_README.md
-```
-
----
-
-# 🎮 Unity Integration
-
-The repository includes:
-
-```text
-UnityWebSocketClient.cs
-```
-
-This client is intended to simplify communication between Unity and the NPC backend.
-
-Typical operations include:
-
-```csharp
-unityClient.ConnectToServer();
-
-unityClient.StartRecording();
-
-unityClient.StopRecording();
-
-unityClient.SendAudioFile("path/to/audio.wav");
-```
-
-Transcription events can be consumed through:
-
-```csharp
-unityClient.OnTranscriptionReceived += (text) =>
-{
-    Debug.Log($"Transcription: {text}");
-};
-```
-
----
-
-# 🌐 Nginx + WebSocket
-
-When the application is deployed behind Nginx, WebSocket upgrade headers must be forwarded correctly.
-
-A basic configuration is:
-
-```nginx
-location /ws/ {
-    proxy_pass http://127.0.0.1:8000;
-    proxy_http_version 1.1;
-
-    proxy_set_header Upgrade $http_upgrade;
-    proxy_set_header Connection "upgrade";
-
-    proxy_set_header Host $host;
-    proxy_set_header X-Real-IP $remote_addr;
-    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto $scheme;
-
-    proxy_read_timeout 86400;
-    proxy_send_timeout 86400;
-}
-```
-
-This is required because WebSocket connections depend on the HTTP `Upgrade` mechanism. The repository contains a dedicated Nginx troubleshooting document for this configuration.
-
----
-
-# 🧪 Testing
-
-The repository includes WebSocket test clients:
+## Operations and debugging
 
 ```bash
-python test_websocket_client.py
+make ps
+make logs
+make health
+docker compose logs -f agent-worker stt llm tts
+docker compose exec redis redis-cli -n 1 ping
 ```
 
-or:
+Grafana provisions the **MetaRang Realtime Pipeline** dashboard. Prometheus includes LiveKit rooms/participants, queue depth, error counters, active jobs, and stage latency. Tempo traces use `session.id` and `turn.id`; JSON application logs include trace/span IDs. Loki ingests Docker stdout through the OpenTelemetry Collector. Useful LogQL starts with a container selector followed by `| json`, then filter on `session_id` or `event`.
+
+Raw audio, prompts, retrieved document text, and complete transcripts are not logged. Application logs are sent directly to the collector over OTLP, avoiding host-specific access to Docker's private data root. Infrastructure container logs such as LiveKit, Redis, and Ollama remain available through `docker compose logs`.
+
+## Tests and smoke test
 
 ```bash
-python test_websocket_simple.py
+make test
+make config
+make smoke WAV=path/to/spoken-test.wav
 ```
 
-The browser-based WebSocket test interface is available at:
+The smoke client creates a session, connects with the Python LiveKit SDK, publishes a WAV as a microphone track, waits for a final user transcript and agent audio, then deletes the room. It requires a working vector store, Ollama model, STT, and TTS; it does not require Unity.
 
-```text
-http://localhost:8000/websocket-test/
-```
-
-The API documentation also provides an example for testing an audio file:
+## Scaling
 
 ```bash
-python test_websocket_client.py path/to/audio.wav
+docker compose up -d --scale agent-worker=4
+docker compose up -d --scale stt=2 --scale llm=2 --scale tts=2
 ```
 
----
+| Service | Scale behavior |
+|---|---|
+| `agent-worker` | Stateless per job. LiveKit distributes explicit dispatch jobs; this is the preferred first scaling axis. |
+| `stt` | One bounded inference queue/model per replica. Use one worker per GPU unless measured otherwise. |
+| `llm` | Safe for replicas on one Compose host; vector stores are read-only during chat and memory files use cross-process locks plus atomic replacement. Ollama may remain the bottleneck. |
+| `tts` | Safe per replica; synthesis is serialized within each replica because the model is not thread-safe. |
+| `vc` | Cache is local and safe, but each replica needs assigned GPU capacity. Do not blindly let replicas contend for one GPU. |
+| `web` | Do not scale with the default SQLite database. Move session persistence to PostgreSQL first. |
+| `redis`, `ollama` | Single instances in this Compose topology. Use an appropriately managed/HA topology if their availability requirements increase. |
 
-# 📊 WebSocket Audio Processing
+Compose DNS provides coarse distribution for internal HTTP replicas; persistent keep-alive connections can make it uneven. Add a proper internal load balancer only when measurements justify it.
 
-The current STT implementation uses configurable audio segmentation parameters.
+## Production
 
-Default values include:
-
-| Parameter            |    Default |
-| -------------------- | ---------: |
-| Sample Rate          | `16000 Hz` |
-| Channels             |        `1` |
-| Chunk Duration       |  `1000 ms` |
-| Silence Threshold    |   `-40 dB` |
-| Minimum Silence      |   `500 ms` |
-| Sentence-End Silence |  `2000 ms` |
-| Minimum Sentence     |   `500 ms` |
-
-This allows the backend to process a continuous audio stream while producing sentence-level transcription events.
-
----
-
-# 🏭 Production Architecture
-
-A recommended production topology is:
-
-```text
-                         ┌───────────────┐
-                         │     Unity     │
-                         │    Client     │
-                         └───────┬───────┘
-                                 │
-                         HTTPS / WSS
-                                 │
-                                 ▼
-                         ┌───────────────┐
-                         │     Nginx     │
-                         │ Reverse Proxy │
-                         └───────┬───────┘
-                                 │
-                     ┌───────────▼───────────┐
-                     │      Django ASGI      │
-                     │       Uvicorn         │
-                     └───────────┬───────────┘
-                                 │
-             ┌───────────────────┼───────────────────┐
-             │                   │                   │
-             ▼                   ▼                   ▼
-        ┌─────────┐        ┌───────────┐       ┌─────────┐
-        │   STT   │        │    LLM    │       │   TTS   │
-        │ Whisper │        │   + RAG   │       │ Service │
-        └─────────┘        └───────────┘       └─────────┘
-                                 │
-                                 ▼
-                           Vector Storage
-                                 │
-                                 ▼
-                              Redis
-                                 │
-                    ┌────────────┴────────────┐
-                    ▼                         ▼
-              Celery Worker              Celery Beat
-                    │
-                    ▼
-                  Tasks
-```
-
----
-
-# 🔒 Production Security Checklist
-
-Before deploying this project publicly, review the following:
-
-* [ ] Set `DEBUG=False`
-* [ ] Move `SECRET_KEY` to environment variables
-* [ ] Restrict `ALLOWED_HOSTS`
-* [ ] Restrict CORS origins
-* [ ] Configure CSRF trusted origins
-* [ ] Use HTTPS
-* [ ] Use `wss://` instead of `ws://`
-* [ ] Protect Django Admin
-* [ ] Protect Flower
-* [ ] Restrict Redis from public access
-* [ ] Store model files outside the Git repository
-* [ ] Store API keys outside source code
-* [ ] Configure production logging
-* [ ] Configure database backups
-* [ ] Configure resource limits for AI workloads
-
-In particular, the current settings use:
-
-```python
-DEBUG = True
-```
-
-and:
-
-```python
-CORS_ALLOW_ALL_ORIGINS = True
-```
-
-These settings are appropriate only for development/testing and should be reviewed before production deployment.
-
----
-
-# 📁 Main Components
-
-| Component                  | Responsibility                                         |
-| -------------------------- | ------------------------------------------------------ |
-| `MetaRangNPC`              | Django project configuration and ASGI/WSGI entrypoints |
-| `LLM`                      | LLM and AI-related functionality                       |
-| `STT`                      | Speech-to-Text / Whisper                               |
-| `TTS`                      | Text-to-Speech integration                             |
-| `VC`                       | Voice conversion functionality                         |
-| `UnityWebSocketClient.cs`  | Unity ↔ backend real-time communication                |
-| `test_websocket_client.py` | WebSocket client testing                               |
-| `test_websocket_simple.py` | Simple WebSocket testing                               |
-| `docker-compose.yml`       | Multi-service deployment                               |
-| `Dockerfile`               | Backend container image                                |
-| `NGINX_WEBSOCKET_FIX.md`   | WebSocket reverse-proxy configuration                  |
-| `WEBSOCKET_API_README.md`  | STT WebSocket protocol documentation                   |
-
----
-
-# 🔄 NPC Interaction Flow
-
-A typical voice interaction can be represented as:
-
-```text
-Player speaks
-     │
-     ▼
-Unity Microphone
-     │
-     ▼
-WebSocket
-     │
-     ▼
-STT / Whisper
-     │
-     ▼
-Text
-     │
-     ▼
-LLM / RAG
-     │
-     ├── Retrieve Context
-     │
-     └── Generate Response
-     │
-     ▼
-NPC Response
-     │
-     ▼
-TTS
-     │
-     ▼
-Audio
-     │
-     ▼
-Unity
-     │
-     ▼
-NPC speaks
-```
-
-This architecture separates speech recognition, reasoning, retrieval and speech synthesis into independent layers, making the system easier to extend and maintain.
-
----
-
-# 🛠️ Development
-
-A typical development workflow is:
+Production uses Linux host networking only for LiveKit’s latency-sensitive media server. Start it with:
 
 ```bash
-git checkout -b feature/my-feature
-
-# Make changes
-
-python manage.py migrate
-
-python manage.py runserver
-
-# Run relevant tests
-
-git add .
-
-git commit -m "feat: implement my feature"
-
-git push origin feature/my-feature
+make production-up
 ```
 
-Pull requests should include:
+Do not run that command until DNS, certificates, public IP, firewall rules, secrets, allowed origins, model paths, and TURN topology are configured. See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) for the exact checklist and ports.
 
-* Description of the change
-* Reason for the change
-* Testing performed
-* Configuration changes
-* Any required model/service changes
+## Legacy interfaces and known limitations
 
----
+The old browser panel, Django SSE endpoints, and Channels WebSocket routes remain available for existing testing workflows, but new clients should use LiveKit. The ASGI router now mounts those legacy WebSocket routes correctly.
 
-# 🐛 Troubleshooting
+Current limitations:
 
-## WebSocket connection refused
-
-Check that Redis and the ASGI server are running.
-
-```bash
-redis-cli ping
-```
-
-Then verify:
-
-```text
-http://localhost:8000
-```
-
-For production behind Nginx, verify that the `Upgrade` and `Connection` headers are forwarded correctly.
-
----
-
-## Whisper model does not load
-
-Verify that the required model is available in the expected model directory and that the runtime has sufficient memory.
-
-The STT documentation specifically identifies missing Whisper model files as one possible cause of model-loading failures.
-
----
-
-## Audio is not transcribed
-
-Verify the incoming audio is:
-
-```text
-16 kHz
-Mono
-16-bit PCM
-```
-
-Incorrect audio format can prevent successful processing.
-
----
-
-## High transcription latency
-
-The STT implementation processes audio in chunks.
-
-Potential adjustments include:
-
-* Reduce chunk duration
-* Optimize Whisper model size
-* Use GPU acceleration
-* Optimize audio preprocessing
-* Separate STT workers
-* Scale WebSocket consumers
-
-The repository documentation specifically notes chunk size and processing frequency as latency-related configuration points.
-
----
-
-# 📚 Documentation
-
-Additional project documentation:
-
-* `WEBSOCKET_API_README.md` — WebSocket audio transcription API
-* `NGINX_WEBSOCKET_FIX.md` — Nginx/WebSocket deployment configuration
-
----
-
-# 🗺️ Roadmap
-
-Potential future improvements include:
-
-* [ ] Production-ready environment configuration
-* [ ] Authentication for WebSocket connections
-* [ ] Per-NPC memory
-* [ ] Persistent conversation history
-* [ ] Improved RAG pipeline
-* [ ] NPC personality and behavior profiles
-* [ ] Multiple concurrent NPC sessions
-* [ ] GPU worker management
-* [ ] STT/TTS service isolation
-* [ ] API authentication and rate limiting
-* [ ] PostgreSQL production database
-* [ ] Automated test coverage
-* [ ] CI/CD quality gates
-* [ ] Monitoring and observability
-* [ ] Horizontal scaling of WebSocket workers
-* [ ] Production model management
-
----
-
-# 🤝 Contributing
-
-Contributions are welcome.
-
-1. Fork the repository
-2. Create a feature branch
-3. Implement your changes
-4. Test the affected components
-5. Commit your changes
-6. Open a Pull Request
-
-Please keep changes focused and document any new environment variables, services or model requirements.
-
----
-
-# 📄 License
-
-The license for this project should be defined in the repository before publishing or distributing the software.
-
-If this project is intended for internal MetaRang use, add the organization's approved license and copyright notice here.
-
----
-
-# 👨‍💻 Project
-
-**MetaRang Semi-Intelligent NPC**
-
-Repository:
-
-`iranpsc/Metaverse-Rang-Semi-intelligent-NPC`
-
-Built as part of the **MetaRang Metaverse** ecosystem.
-
----
+- no authentication or rate limiting on session creation;
+- final-only user transcripts with Whisper;
+- energy/silence endpointing only, with no semantic turn detection or barge-in;
+- TTS and FreeVC buffer one sentence WAV because the existing providers are non-streaming;
+- FreeVC is CUDA-only and opt-in through the `voice-conversion` profile;
+- SQLite prevents safe Django horizontal scaling;
+- Compose is a single-host topology; Kubernetes was intentionally not introduced.
