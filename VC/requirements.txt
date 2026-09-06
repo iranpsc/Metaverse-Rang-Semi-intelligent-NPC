@@ -1,5 +1,5 @@
 glob2==0.7
-tqdm==4.62.3
+tqdm==4.66.3
 librosa==0.8.1
 numpy==1.21.6
 numba==0.56.4
