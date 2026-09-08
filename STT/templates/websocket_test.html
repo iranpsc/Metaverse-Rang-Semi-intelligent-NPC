@@ -173,7 +173,7 @@
         function addMessage(message) {
             const messagesDiv = document.getElementById('messages');
             const timestamp = new Date().toLocaleTimeString();
-            messagesDiv.innerHTML += `[${timestamp}] ${message}\n`;
+            messagesDiv.textContent += `[${timestamp}] ${message}\n`;
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
         
@@ -181,7 +181,7 @@
             const transcriptionDiv = document.getElementById('transcription');
             const sentenceDiv = document.createElement('div');
             sentenceDiv.className = 'sentence';
-            sentenceDiv.innerHTML = `[${timestamp.toFixed(2)}s] Sentence ${sentenceIndex + 1}/${totalSentences}: ${text}`;
+            sentenceDiv.textContent = `[${timestamp.toFixed(2)}s] Sentence ${sentenceIndex + 1}/${totalSentences}: ${text}`;
             transcriptionDiv.appendChild(sentenceDiv);
             transcriptionDiv.scrollTop = transcriptionDiv.scrollHeight;
         }
