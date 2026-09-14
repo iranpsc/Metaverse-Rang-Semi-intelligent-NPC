@@ -1,140 +1,482 @@
 {% extends 'base.html' %}
 
+{% block title %}VoiceAI Operations Dashboard{% endblock %}
+
+{% block extra_css %}
+<style>
+    :root {
+        --dash-ink: #13213c;
+        --dash-muted: #68738a;
+        --dash-canvas: #eef3f8;
+        --dash-panel: #ffffff;
+        --dash-line: #dbe3ed;
+        --dash-blue: #315cf4;
+        --dash-blue-dark: #173bb8;
+        --dash-cyan: #20b8c9;
+        --dash-mint: #dcf8f1;
+        --dash-danger: #c53d52;
+        --dash-shadow: 0 18px 45px rgba(29, 49, 83, 0.09);
+    }
+
+    body {
+        background: var(--dash-canvas);
+        color: var(--dash-ink);
+        font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+    }
+
+    .content-container { padding: 0; }
+
+    .dashboard-shell {
+        display: grid;
+        grid-template-columns: 250px minmax(0, 1fr);
+        min-height: calc(100vh - 60px);
+    }
+
+    .dashboard-rail {
+        position: sticky;
+        top: 60px;
+        height: calc(100vh - 60px);
+        padding: 30px 20px;
+        overflow-y: auto;
+        background: #101d35;
+        color: #d7dfed;
+    }
+
+    .rail-kicker, .section-kicker, .metric-label {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+    }
+
+    .rail-kicker {
+        margin: 0 0 6px;
+        color: #7f91b0;
+        font-size: 0.68rem;
+    }
+
+    .rail-title {
+        margin: 0 0 28px;
+        color: #fff;
+        font: 400 1.45rem/1.15 Georgia, "Times New Roman", serif;
+    }
+
+    .rail-nav { display: grid; gap: 8px; }
+
+    .rail-link {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 12px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        color: #b9c5d8;
+        font-size: 0.91rem;
+        text-decoration: none;
+        transition: background 160ms ease, border-color 160ms ease, color 160ms ease;
+    }
+
+    .rail-link i { width: 18px; color: #7185a8; text-align: center; }
+    .rail-link:hover, .rail-link:focus-visible, .rail-link.active {
+        border-color: rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.08);
+        color: #fff;
+    }
+    .rail-link.active i { color: #4be0cf; }
+
+    .rail-status {
+        margin-top: 34px;
+        padding-top: 20px;
+        border-top: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .status-line {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin-bottom: 8px;
+        color: #fff;
+        font-size: 0.82rem;
+        font-weight: 700;
+    }
+
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #4be0cf;
+        box-shadow: 0 0 0 5px rgba(75, 224, 207, 0.12);
+    }
+
+    .rail-note { margin: 0; color: #8293ad; font-size: 0.76rem; line-height: 1.5; }
+    .dashboard-main { min-width: 0; padding: 32px clamp(22px, 4vw, 56px) 56px; }
+
+    .signal-header {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 0.75fr);
+        gap: 28px;
+        min-height: 220px;
+        padding: clamp(28px, 4vw, 46px);
+        overflow: hidden;
+        border-radius: 18px;
+        background: var(--dash-blue);
+        box-shadow: 0 22px 50px rgba(49, 92, 244, 0.22);
+        color: white;
+    }
+
+    .signal-header::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(110deg, transparent 45%, rgba(255,255,255,.07));
+        pointer-events: none;
+    }
+
+    .signal-copy { position: relative; z-index: 1; align-self: center; }
+    .section-kicker { margin: 0 0 12px; color: inherit; font-size: 0.7rem; font-weight: 700; opacity: 0.7; }
+
+    .signal-title {
+        max-width: 670px;
+        margin: 0;
+        color: white;
+        font: 400 clamp(2.15rem, 4.2vw, 4.7rem)/0.98 Georgia, "Times New Roman", serif;
+        letter-spacing: -0.045em;
+    }
+
+    .signal-subtitle {
+        max-width: 580px;
+        margin: 20px 0 0;
+        color: #dfe7ff;
+        font-size: 0.98rem;
+        line-height: 1.65;
+    }
+
+    .signal-visual {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 150px;
+    }
+    .signal-visual svg { width: 100%; height: auto; filter: drop-shadow(0 10px 18px rgba(8, 21, 67, 0.2)); }
+    .signal-path { stroke-dasharray: 540; stroke-dashoffset: 540; animation: trace-signal 1.5s ease-out forwards; }
+    @keyframes trace-signal { to { stroke-dashoffset: 0; } }
+
+    .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin: 18px 0 28px;
+    }
+
+    .metric-card {
+        min-width: 0;
+        padding: 20px;
+        border: 1px solid var(--dash-line);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.88);
+    }
+
+    .metric-label { display: block; margin-bottom: 8px; color: var(--dash-muted); font-size: 0.65rem; font-weight: 700; }
+    .metric-value {
+        display: block;
+        overflow: hidden;
+        color: var(--dash-ink);
+        font: 400 2rem/1 Georgia, "Times New Roman", serif;
+        text-overflow: ellipsis;
+    }
+
+    .workspace-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.22fr) minmax(330px, 0.78fr);
+        gap: 22px;
+        align-items: start;
+    }
+
+    .dashboard-panel {
+        min-width: 0;
+        border: 1px solid var(--dash-line);
+        border-radius: 14px;
+        background: var(--dash-panel);
+        box-shadow: var(--dash-shadow);
+    }
+
+    .panel-header {
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 20px;
+        padding: 24px 26px 18px;
+        border-bottom: 1px solid var(--dash-line);
+    }
+    .panel-header h2 { margin: 0; color: var(--dash-ink); font: 400 1.65rem Georgia, "Times New Roman", serif; }
+    .panel-header .section-kicker { margin-bottom: 5px; color: var(--dash-blue); opacity: 1; }
+    .panel-action { flex: 0 0 auto; color: var(--dash-blue-dark); font-size: 0.8rem; font-weight: 700; text-decoration: none; }
+    .panel-action:hover { color: var(--dash-blue); text-decoration: underline; text-underline-offset: 4px; }
+
+    .model-category { padding: 22px 26px; border-bottom: 1px solid var(--dash-line); }
+    .model-category:last-child { border-bottom: 0; }
+    .model-category-title { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+    .model-category h3 { margin: 0; color: var(--dash-ink); font-size: 0.95rem; font-weight: 700; }
+    .category-count { color: var(--dash-muted); font: 0.7rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .model-list { display: grid; gap: 9px; }
+
+    .model-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 10px 18px;
+        padding: 14px 15px;
+        border: 1px solid #e4e9f0;
+        border-left: 3px solid var(--dash-cyan);
+        border-radius: 7px;
+        background: #f8fafc;
+        transition: border-color 160ms ease, transform 160ms ease;
+    }
+    .model-item:hover { border-color: #bdc9da; border-left-color: var(--dash-blue); transform: translateX(2px); }
+    .model-info { display: contents; }
+    .model-info strong { min-width: 0; overflow-wrap: anywhere; color: var(--dash-ink); font-size: 0.9rem; }
+
+    .model-status, .model-size {
+        align-self: start;
+        padding: 4px 7px;
+        border-radius: 4px;
+        font: 700 0.64rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+    .model-status.completed { background: var(--dash-mint); color: #087864; }
+    .model-size { background: #e7edff; color: var(--dash-blue-dark); }
+    .model-details {
+        grid-column: 1 / -1;
+        min-width: 0;
+        color: var(--dash-muted);
+        font: 0.68rem/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .model-details small { display: block; overflow-wrap: anywhere; }
+
+    .recordings-list {
+        max-height: 900px;
+        padding: 8px 18px 20px;
+        overflow-y: auto;
+        scrollbar-color: #c2ccda transparent;
+    }
+
+    .recording-item {
+        position: relative;
+        margin: 0;
+        padding: 20px 8px 20px 20px;
+        border: 0;
+        border-bottom: 1px solid var(--dash-line);
+        border-radius: 0;
+        background: transparent;
+        box-shadow: none;
+        transform: none;
+    }
+    .recording-item::before { content: ""; position: absolute; top: 25px; left: 2px; width: 7px; height: 7px; border-radius: 50%; background: var(--dash-cyan); }
+    .recording-item:hover { transform: none; }
+    .recording-date {
+        margin-bottom: 10px;
+        color: var(--dash-muted);
+        font: 700 0.67rem ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+    }
+    .recording-audio { width: 100%; height: 36px; margin: 0 0 12px; }
+    .recording-transcript {
+        margin: 0 0 14px;
+        padding: 12px 14px;
+        border: 0;
+        border-radius: 6px;
+        background: #f3f6fa;
+        color: #34415a;
+        font-size: 0.84rem;
+        line-height: 1.55;
+        white-space: pre-wrap;
+    }
+    .recording-transcript strong { display: block; margin-bottom: 4px; color: var(--dash-ink); font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; }
+    .action-buttons { display: flex; justify-content: flex-end; }
+    .delete-btn { padding: 5px 0; border: 0; border-bottom: 1px solid transparent; background: transparent; color: var(--dash-danger); font-size: 0.72rem; font-weight: 700; }
+    .delete-btn:hover, .delete-btn:focus-visible { border-color: currentColor; }
+    .no-recordings { margin: 16px 8px 0; padding: 38px 24px; border: 1px dashed #bdc8d8; border-radius: 8px; background: #f8fafc; box-shadow: none; color: var(--dash-muted); font-style: normal; }
+    :is(.rail-link, .panel-action, .delete-btn):focus-visible { outline: 3px solid rgba(32, 184, 201, 0.45); outline-offset: 3px; }
+
+    @media (max-width: 1080px) {
+        .workspace-grid { grid-template-columns: 1fr; }
+        .recordings-list { max-height: none; }
+    }
+    @media (max-width: 820px) {
+        .dashboard-shell { grid-template-columns: 1fr; }
+        .dashboard-rail { position: static; height: auto; padding: 16px 18px; }
+        .rail-title, .rail-status { display: none; }
+        .rail-kicker { margin-bottom: 10px; }
+        .rail-nav { display: flex; gap: 7px; overflow-x: auto; padding-bottom: 2px; }
+        .rail-link { flex: 0 0 auto; }
+        .dashboard-main { padding-top: 22px; }
+        .signal-header { grid-template-columns: 1fr; }
+        .signal-visual { justify-content: flex-start; min-height: 90px; }
+        .signal-visual svg { max-width: 440px; }
+        .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 520px) {
+        .dashboard-main { padding: 16px 12px 36px; }
+        .signal-header { padding: 25px 22px; border-radius: 12px; }
+        .signal-title { font-size: 2.35rem; }
+        .metric-grid { gap: 9px; }
+        .metric-card { padding: 15px; }
+        .metric-value { font-size: 1.65rem; }
+        .panel-header { align-items: flex-start; padding: 20px; }
+        .model-category { padding: 20px; }
+        .model-item { grid-template-columns: 1fr; }
+        .model-info { display: flex; align-items: flex-start; justify-content: space-between; }
+        .model-details { grid-column: auto; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .signal-path { animation: none; stroke-dashoffset: 0; }
+        .model-item, .rail-link { transition: none; }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
-    <h1>NPC AI</h1>
-
-    <!-- Available Models Section -->
-    <div class="models-section">
-        <h2>Available Models</h2>
-        
-        <!-- Custom Trained Models -->
-        {% if trained_models %}
-        <div class="model-category">
-            <h3>Custom Trained Models</h3>
-            <div class="model-list">
-                {% for model in trained_models %}
-                <div class="model-item">
-                    <div class="model-info">
-                        <strong>{{ model.base_model|title }} - {{ model.language|title }}</strong>
-                        <span class="model-status completed">{{ model.status|title }}</span>
-                    </div>
-                    <div class="model-details">
-                        <small>Created: {{ model.created_at|date:"F j, Y H:i" }}</small>
-                        {% if model.model_path %}
-                        <small>Path: {{ model.model_path }}</small>
-                        {% endif %}
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
+<div class="dashboard-shell">
+    <aside class="dashboard-rail" aria-label="Dashboard navigation">
+        <p class="rail-kicker">Voice operations</p>
+        <h2 class="rail-title">NPC AI<br>control room</h2>
+        <nav class="rail-nav">
+            <a class="rail-link active" href="{% url 'home' %}" aria-current="page"><i class="fas fa-chart-pie" aria-hidden="true"></i> Overview</a>
+            <a class="rail-link" href="{% url 'record' %}"><i class="fas fa-microphone" aria-hidden="true"></i> Record audio</a>
+            <a class="rail-link" href="{% url 'rag_chat_page' %}"><i class="fas fa-message" aria-hidden="true"></i> AI chat</a>
+            <a class="rail-link" href="{% url 'fine-tune-whisper' %}"><i class="fas fa-sliders" aria-hidden="true"></i> Fine-tune STT</a>
+            <a class="rail-link" href="{% url 'voice_samples_page' %}"><i class="fas fa-wave-square" aria-hidden="true"></i> Voice samples</a>
+            <a class="rail-link" href="{% url 'rag_chat_page' %}#rag-tools"><i class="fas fa-layer-group" aria-hidden="true"></i> RAG knowledge</a>
+        </nav>
+        <div class="rail-status">
+            <div class="status-line"><span class="status-dot"></span> Workspace ready</div>
+            <p class="rail-note">Models and recordings are indexed below for quick inspection.</p>
         </div>
-        {% endif %}
+    </aside>
 
-        <!-- Local Model Files -->
-        {% if available_models %}
-        <div class="model-category">
-            <h3>Local Model Files</h3>
-            <div class="model-list">
-                {% for model in available_models %}
-                <div class="model-item">
-                    <div class="model-info">
-                        <strong>{{ model.name }}</strong>
-                        <span class="model-size">{{ model.size_mb }} MB</span>
-                    </div>
-                    <div class="model-details">
-                        <small>Path: {{ model.path }}</small>
+    <div class="dashboard-main">
+        <header class="signal-header">
+            <div class="signal-copy">
+                <p class="section-kicker">Unified voice workspace</p>
+                <h1 class="signal-title">From signal<br>to intelligence.</h1>
+                <p class="signal-subtitle">Record speech, inspect transcripts, manage Whisper models, and continue the conversation from one operational view.</p>
+            </div>
+            <div class="signal-visual" aria-hidden="true">
+                <svg viewBox="0 0 520 180" role="presentation">
+                    <path d="M5 91H67L85 91L99 44L123 139L149 19L176 160L203 66L225 112L249 89L276 89L292 54L310 125L333 30L357 148L383 71L405 104L427 90H515" fill="none" stroke="rgba(255,255,255,.24)" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path class="signal-path" d="M5 91H67L85 91L99 44L123 139L149 19L176 160L203 66L225 112L249 89L276 89L292 54L310 125L333 30L357 148L383 71L405 104L427 90H515" fill="none" stroke="#7ff3e1" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+            </div>
+        </header>
+
+        <section class="metric-grid" aria-label="Workspace summary">
+            <div class="metric-card"><span class="metric-label">Recordings</span><span class="metric-value">{{ recordings|length }}</span></div>
+            <div class="metric-card"><span class="metric-label">Trained models</span><span class="metric-value">{{ trained_models|length }}</span></div>
+            <div class="metric-card"><span class="metric-label">Local files</span><span class="metric-value">{{ available_models|length }}</span></div>
+            <div class="metric-card"><span class="metric-label">Whisper profiles</span><span class="metric-value">{{ standard_models|length }}</span></div>
+        </section>
+
+        <div class="workspace-grid">
+            <section class="dashboard-panel" aria-labelledby="models-heading">
+                <div class="panel-header">
+                    <div><p class="section-kicker">Model registry</p><h2 id="models-heading">Available models</h2></div>
+                    <a class="panel-action" href="{% url 'fine-tune-whisper' %}">Train a model →</a>
+                </div>
+
+                {% if trained_models %}
+                <div class="model-category">
+                    <div class="model-category-title"><h3>Custom trained models</h3><span class="category-count">{{ trained_models|length }} total</span></div>
+                    <div class="model-list">
+                        {% for model in trained_models %}
+                        <article class="model-item">
+                            <div class="model-info"><strong>{{ model.base_model|title }} · {{ model.language|title }}</strong><span class="model-status completed">{{ model.status|title }}</span></div>
+                            <div class="model-details"><small>Created {{ model.created_at|date:"M j, Y · H:i" }}</small>{% if model.model_path %}<small>{{ model.model_path }}</small>{% endif %}</div>
+                        </article>
+                        {% endfor %}
                     </div>
                 </div>
-                {% endfor %}
-            </div>
-        </div>
-        {% endif %}
+                {% endif %}
 
-        <!-- Standard Whisper Models -->
-        <div class="model-category">
-            <h3>Standard Whisper Models</h3>
-            <div class="model-list">
-                {% for model in standard_models %}
-                <div class="model-item">
-                    <div class="model-info">
-                        <strong>{{ model.name|title }}</strong>
-                        <span class="model-size">{{ model.size }}</span>
-                    </div>
-                    <div class="model-details">
-                        <small>{{ model.description }}</small>
+                {% if available_models %}
+                <div class="model-category">
+                    <div class="model-category-title"><h3>Local model files</h3><span class="category-count">{{ available_models|length }} total</span></div>
+                    <div class="model-list">
+                        {% for model in available_models %}
+                        <article class="model-item">
+                            <div class="model-info"><strong>{{ model.name }}</strong><span class="model-size">{{ model.size_mb }} MB</span></div>
+                            <div class="model-details"><small>{{ model.path }}</small></div>
+                        </article>
+                        {% endfor %}
                     </div>
                 </div>
-                {% endfor %}
-            </div>
+                {% endif %}
+
+                <div class="model-category">
+                    <div class="model-category-title"><h3>Standard Whisper models</h3><span class="category-count">{{ standard_models|length }} profiles</span></div>
+                    <div class="model-list">
+                        {% for model in standard_models %}
+                        <article class="model-item">
+                            <div class="model-info"><strong>{{ model.name|title }}</strong><span class="model-size">{{ model.parameters }}</span></div>
+                            <div class="model-details"><small>{{ model.description }}</small></div>
+                        </article>
+                        {% endfor %}
+                    </div>
+                </div>
+            </section>
+
+            <section class="dashboard-panel" aria-labelledby="recordings-heading">
+                <div class="panel-header">
+                    <div><p class="section-kicker">Recent activity</p><h2 id="recordings-heading">Recordings</h2></div>
+                    <a class="panel-action" href="{% url 'record' %}">New recording →</a>
+                </div>
+                <div class="recordings-list" aria-live="polite">
+                    {% if recordings %}
+                        {% for recording in recordings %}
+                        <article class="recording-item" id="recording-{{ recording.id }}">
+                            <div class="recording-date">{{ recording.created_at|date:"M j, Y · H:i" }}</div>
+                            <audio controls preload="metadata" class="recording-audio"><source src="{{ recording.audio_file.url }}" type="audio/wav">Your browser does not support the audio element.</audio>
+                            <div class="recording-transcript"><strong>Transcript</strong>{{ recording.transcript|default:"No transcription available" }}</div>
+                            <div class="action-buttons"><button type="button" class="delete-btn" onclick="deleteRecording({{ recording.id }})">Delete recording</button></div>
+                        </article>
+                        {% endfor %}
+                    {% else %}
+                        <div class="no-recordings">No recordings yet. Start with “New recording” to create the first one.</div>
+                    {% endif %}
+                </div>
+            </section>
         </div>
     </div>
-
-    <div class="recordings-list">
-        {% if recordings %}
-            {% for recording in recordings %}
-            <div class="recording-item" id="recording-{{ recording.id }}">
-                <div class="recording-date">
-                    {{ recording.created_at|date:"F j, Y H:i" }}
-                </div>
-                
-                <audio controls class="recording-audio">
-                    <source src="{{ recording.audio_file.url }}" type="audio/wav">
-                    Your browser does not support the audio element.
-                </audio>
-                
-                <div class="recording-transcript">
-                    <strong>Transcript:</strong><br>
-                    {{ recording.transcript|default:"No transcription available" }}
-                </div>
-                
-                <div class="action-buttons">
-                    <button class="delete-btn" onclick="deleteRecording({{ recording.id }})">
-                        Delete Recording
-                    </button>
-                </div>
-            </div>
-            {% endfor %}
-        {% else %}
-            <div class="no-recordings">
-                No recordings found. Record your first audio!
-            </div>
-        {% endif %}
-    </div>
+</div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
-    function deleteRecording(recordingId) {
-        if (confirm("Are you sure you want to delete this recording?")) {
-            fetch(`/delete-recording/${recordingId}/`, {
-                method: "DELETE",
-                headers: {
-                    "X-CSRFToken": "{{ csrf_token }}",
-                    "Content-Type": "application/json",
-                },
-            })
-                .then((response) => {
-                    if (response.ok) {
-                        // Remove the recording element from the DOM
-                        document.getElementById(`recording-${recordingId}`).remove();
+    function getCsrfToken() {
+        const cookie = document.cookie.split('; ').find((row) => row.startsWith('csrftoken='));
+        return cookie ? decodeURIComponent(cookie.split('=')[1]) : '{{ csrf_token }}';
+    }
 
-                        // If no recordings left, show message
-                        if (document.querySelectorAll(".recording-item").length === 0) {
-                            document.querySelector(".recordings-list").innerHTML = `
-                                <div class="no-recordings">
-                                    No recordings found. Record your first audio!
-                                </div>
-                            `;
-                        }
-                    } else {
-                        alert("Error deleting recording");
-                    }
-                })
-                .catch((error) => {
-                    console.error("Error:", error);
-                    alert("Error deleting recording");
-                });
-        }
+    function deleteRecording(recordingId) {
+        if (!confirm('Delete this recording? This action cannot be undone.')) return;
+        fetch(`/delete-recording/${recordingId}/`, {
+            method: 'DELETE',
+            headers: { 'X-CSRFToken': getCsrfToken(), 'Content-Type': 'application/json' }
+        })
+            .then((response) => {
+                if (!response.ok) throw new Error('Delete request failed');
+                const recording = document.getElementById(`recording-${recordingId}`);
+                if (recording) recording.remove();
+                const remaining = document.querySelectorAll('.recording-item').length;
+                const metric = document.querySelector('.metric-card:first-child .metric-value');
+                if (metric) metric.textContent = remaining;
+                if (remaining === 0) {
+                    document.querySelector('.recordings-list').innerHTML = '<div class="no-recordings">No recordings yet. Start with “New recording” to create the first one.</div>';
+                }
+            })
+            .catch(() => alert('The recording could not be deleted. Try again.'));
     }
 </script>
 {% endblock %}
