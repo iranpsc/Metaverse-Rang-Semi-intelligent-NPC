@@ -188,13 +188,26 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path in {"/health", "/health/live", "/health/ready"}:
             self._send_json(200, {
                 "status": "ok",
                 "cuda": USE_CUDA,
                 "use_spk": USE_SPK,
                 "cached_targets": len(_target_cache),
+            })
+        elif path == "/samples/validate":
+            target = (parse_qs(parsed.query).get("target", [""])[0]).strip()
+            try:
+                sample_path, name = _resolve_sample(target)
+            except FileNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            self._send_json(200, {
+                "status": "ok",
+                "filename": name,
+                "size_bytes": os.path.getsize(sample_path),
             })
         elif path == "/metrics":
             body = generate_latest()
