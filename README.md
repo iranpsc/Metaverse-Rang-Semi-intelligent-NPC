@@ -76,6 +76,14 @@ Start the complete voice-conversion path on an NVIDIA host:
 make up-with-vc
 ```
 
+For clients outside the Docker host, allow/forward `7881/tcp` and `7882/udp`
+to the host running LiveKit. HTTPS/WSS reverse proxying covers signaling only;
+WebRTC media connects directly to the public ICE address advertised by LiveKit.
+Set `LIVEKIT_NODE_IP` to the host's real public IPv4 address when this profile
+is reachable from remote clients; LiveKit uses that explicit address instead
+of STUN discovery or the Docker bridge address. Do not leave the
+documentation-only example address in `.env`.
+
 Useful endpoints:
 
 | Purpose | URL |
@@ -124,7 +132,121 @@ Close a session early with:
 DELETE /api/v1/agent/sessions/{session_id}/
 ```
 
+## User vector stores
+
+Create or extend a persistent vector store for a user by uploading one or more
+PDF, DOCX, TXT, or CSV files. The endpoint uses `multipart/form-data` and is
+available in Swagger under the **Vector stores** tag.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/vector-stores/ \
+  -F 'user_id=player-42' \
+  -F 'files=@./knowledge.pdf' \
+  -F 'files=@./faq.txt'
+```
+
+The response includes the identifier to use when creating a session:
+
+```json
+{
+  "user_id": "player-42",
+  "vector_store": "user_player-42/rss_store",
+  "ready": true,
+  "created": true,
+  "files_received": 2,
+  "documents_added": 2,
+  "message": "Added 2 files to knowledge base."
+}
+```
+
+```json
+{
+  "user_id": "player-42",
+  "vector_store": "user_player-42/rss_store",
+  "enable_voice_conversion": false
+}
+```
+
+Check whether a user's store is ready with
+`GET /api/v1/vector-stores/{user_id}/`. Uploading additional files with the
+same `user_id` extends that user's existing store. Upload limits are controlled
+by `VECTOR_STORE_MAX_FILES` and `VECTOR_STORE_MAX_UPLOAD_BYTES`.
+
+The same store can be created or refreshed from RSS or Atom feeds. Use
+`rss_link` for one feed or `rss_links` for multiple feeds:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/vector-stores/rss/ \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "user_id": "player-42",
+    "rss_links": [
+      "https://example.com/feed.xml",
+      "https://example.org/atom.xml"
+    ]
+  }'
+```
+
+```json
+{
+  "user_id": "player-42",
+  "vector_store": "user_player-42/rss_store",
+  "ready": true,
+  "created": false,
+  "rss_links_received": 2,
+  "documents_added": 4,
+  "message": "Successfully added 4 new articles."
+}
+```
+
+The crawler records the newest processed publication date per feed. Calling the
+endpoint again with the same user and feed URLs updates the existing index with
+new articles instead of creating a separate store. The per-request feed limit
+is controlled by `VECTOR_STORE_MAX_RSS_LINKS`.
+
 The complete Unity-facing contract is in [docs/UNITY_LIVEKIT_CONTRACT.md](docs/UNITY_LIVEKIT_CONTRACT.md).
+
+## Voice samples and voice conversion
+
+Upload a target-speaker recording as multipart form data. WAV, MP3, M4A, OGG,
+FLAC, and WebM inputs are accepted and normalized to mono 16 kHz PCM WAV for
+FreeVC.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/voice-samples/ \
+  -F 'name=Narrator' \
+  -F 'audio=@./narrator.webm'
+```
+
+The response includes the sample ID required by the session API:
+
+```json
+{
+  "id": 7,
+  "name": "Narrator",
+  "filename": "5f08d93f1ddd43a5b89e5782a34ce943.wav",
+  "audio_url": "/media/voice_samples/5f08d93f1ddd43a5b89e5782a34ce943.wav",
+  "created_at": "2026-10-07T10:00:00Z"
+}
+```
+
+Enable voice conversion when creating the LiveKit session:
+
+```json
+{
+  "user_id": "player-42",
+  "vector_store": "user_player-42/rss_store",
+  "enable_voice_conversion": true,
+  "voice_sample_id": 7
+}
+```
+
+Before creating the room, Django verifies that the sample file exists in the
+shared media volume and asks the FreeVC service to confirm it can see the same
+normalized file. Start the stack with the `voice-conversion` profile when this
+option is enabled. `GET /api/v1/voice-samples/` lists available sample IDs.
+Delete an unused sample and its stored audio with
+`DELETE /api/v1/voice-samples/{sample_id}/`.
 
 ## Realtime events
 
