@@ -194,7 +194,7 @@ xxhash==3.6.0
 yarl==1.22.0
 zipp==3.23.0
 zstandard==0.25.0
-djangorestframework==3.18.0
+djangorestframework==3.18.2
 drf-spectacular==0.30.0
 fastapi==0.141.1
 gunicorn==23.0.0
