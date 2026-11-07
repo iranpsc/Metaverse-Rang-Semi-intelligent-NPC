@@ -23,6 +23,9 @@ services:
     command: ["--config", "/etc/livekit.yaml"]
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      # When set, this is the address advertised in ICE candidates. Supplying
+      # it avoids leaking an unreachable Docker bridge address to remote SDKs.
+      NODE_IP: ${LIVEKIT_NODE_IP:-}
     volumes:
       - ./deploy/livekit/livekit.dev.yaml:/etc/livekit.yaml:ro
     ports:
@@ -50,6 +53,14 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       DATABASE_PATH: /app/runtime/db.sqlite3
       DATA_ROOT: /app/data
+      VECTOR_STORE_MAX_FILES: ${VECTOR_STORE_MAX_FILES:-10}
+      VECTOR_STORE_MAX_RSS_LINKS: ${VECTOR_STORE_MAX_RSS_LINKS:-10}
+      VECTOR_STORE_MAX_UPLOAD_BYTES: ${VECTOR_STORE_MAX_UPLOAD_BYTES:-26214400}
+      VOICE_SAMPLE_MAX_UPLOAD_BYTES: ${VOICE_SAMPLE_MAX_UPLOAD_BYTES:-26214400}
+      VOICE_SAMPLE_MIN_DURATION_SECONDS: ${VOICE_SAMPLE_MIN_DURATION_SECONDS:-1}
+      VOICE_SAMPLE_MAX_DURATION_SECONDS: ${VOICE_SAMPLE_MAX_DURATION_SECONDS:-60}
+      VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS: ${VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS:-30}
+      VC_SAMPLE_VALIDATION_TIMEOUT_SECONDS: ${VC_SAMPLE_VALIDATION_TIMEOUT_SECONDS:-3}
       MEDIA_ROOT: /app/media
       REDIS_URL: redis://redis:6379/0
       REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-5}
@@ -213,6 +224,11 @@ services:
         read_only: true
     expose: ["5003"]
     runtime: nvidia
+    # Snap Docker's NVIDIA runtime may omit the UVM devices even when
+    # `runtime: nvidia` is set. FreeVC/PyTorch requires them for CUDA tensors.
+    devices:
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5003/health/ready', timeout=2).read()"]
       interval: 20s
