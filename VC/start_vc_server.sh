@@ -1,6 +1,6 @@
 #!/bin/bash
-# Starts the FreeVC voice-conversion microservice inside its dedicated venv
-# (VC/freevc-env/). Run in the background with:
+# Starts the OpenVoice V2 microservice from the current Python environment.
+# Production should use the Compose voice-conversion profile. For local use:
 #   nohup ./start_vc_server.sh > vc_server.log 2>&1 &
-cd "$(dirname "$0")"
-exec ./freevc-env/bin/python vc_server.py "$@"
+cd "$(dirname "$0")/.."
+exec python VC/vc_server.py "$@"

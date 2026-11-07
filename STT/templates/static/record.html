@@ -253,42 +253,18 @@
 {% block content %}
 <h1>NPC AI - Audio Recorder</h1>
 
-<!-- Model Selection Section -->
+<!-- Shared STT service status -->
 <div class="btn-group-vertical d-flex" style="margin-bottom: 30px;">
-    <form id="modelForm" method="get" action="{% url 'record' %}" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);">
-        <label for="modelSelect" style="font-weight:600;">Model:</label>
-        <select id="modelSelect" name="model" class="form-select" style="max-width:320px;">
-            {% if trained_models %}
-            <optgroup label="Custom Trained Models">
-                {% for model in trained_models %}
-                {% if model.model_path %}
-                <option value="{{ model.model_path }}" {% if selected_model == model.model_path %}selected{% endif %}>{{ model.base_model|title }} - {{ model.language|title }} (Fine-Tuned)</option>
-                {% endif %}
-                {% endfor %}
-            </optgroup>
-            {% endif %}
-            {% if available_models %}
-            <optgroup label="Local Models">
-                {% for model in available_models %}
-                <option value="{{ model.path }}" {% if selected_model == model.path %}selected{% endif %}>{{ model.name }} ({{ model.size_mb }} MB)</option>
-                {% endfor %}
-            </optgroup>
-            {% endif %}
-            <optgroup label="Standard Whisper">
-                {% for model in standard_models %}
-                <option value="{{ model.name }}" {% if selected_model == model.name %}selected{% endif %}>{{ model.name|title }} - {{ model.description }}</option>
-                {% endfor %}
-            </optgroup>
-        </select>
-        <button type="submit" class="record-new-btn">Apply Model</button>
-    </form>
+    <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:white; padding:20px; border-radius:10px; box-shadow:0 2px 10px rgba(0,0,0,.1);">
+        <strong>Central STT service</strong>
+        <span>Whisper {{ selected_model|title }}</span>
+        <span style="color:#64748b;">One shared GPU model for Record, WebSocket and LiveKit</span>
+    </div>
 </div>
 
 <div class="recorder-container">
   <h2><i class="fas fa-microphone me-2"></i>Audio Recorder</h2>
-  {% if selected_model %}
-  <p style="margin-top:6px; color:#666;">Using model: <strong>{{ selected_model }}</strong></p>
-  {% endif %}
+  <p style="margin-top:6px; color:#666;">Using shared STT model: <strong>{{ selected_model }}</strong></p>
 
   <div class="recorder-section">
     <div class="control-panel">

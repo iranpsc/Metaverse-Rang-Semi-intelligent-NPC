@@ -6,6 +6,13 @@ from .views import (
     LiveHealthView,
     MetricsView,
     ReadyHealthView,
+    SpeechJobAudioView,
+    SpeechJobCreateView,
+    VectorStoreCreateView,
+    VectorStoreRSSCreateView,
+    VectorStoreStatusView,
+    VoiceSampleListCreateView,
+    VoiceSampleDeleteView,
 )
 
 
@@ -15,6 +22,29 @@ urlpatterns = [
         "agent/sessions/<uuid:session_id>/",
         AgentSessionDeleteView.as_view(),
         name="agent-session-delete",
+    ),
+    path("voice-samples/", VoiceSampleListCreateView.as_view(), name="voice-sample-list-create"),
+    path(
+        "voice-samples/<int:sample_id>/",
+        VoiceSampleDeleteView.as_view(),
+        name="voice-sample-delete",
+    ),
+    path("speech/jobs/", SpeechJobCreateView.as_view(), name="speech-job-create"),
+    path(
+        "speech/jobs/<uuid:job_id>/<str:artifact>/",
+        SpeechJobAudioView.as_view(),
+        name="speech-job-audio",
+    ),
+    path("vector-stores/", VectorStoreCreateView.as_view(), name="vector-store-create"),
+    path(
+        "vector-stores/rss/",
+        VectorStoreRSSCreateView.as_view(),
+        name="vector-store-rss-create",
+    ),
+    path(
+        "vector-stores/<slug:user_id>/",
+        VectorStoreStatusView.as_view(),
+        name="vector-store-status",
     ),
     path("health/live/", LiveHealthView.as_view(), name="health-live"),
     path("health/ready/", ReadyHealthView.as_view(), name="health-ready"),

@@ -109,7 +109,7 @@ class AgentSettings:
             vc_url=validate_url(
                 "VC_SERVER_URL", os.getenv("VC_SERVER_URL", "http://vc:5003"), {"http", "https"}
             ),
-            vc_failure_fallback=env_bool("VC_FAILURE_FALLBACK", True),
+            vc_failure_fallback=env_bool("VC_FAILURE_FALLBACK", False),
             http_connect_timeout_seconds=env_float("HTTP_CONNECT_TIMEOUT_SECONDS", 3.0, minimum=0.1),
             stt_timeout_seconds=env_float("STT_TIMEOUT_SECONDS", 120.0, minimum=1.0),
             llm_timeout_seconds=env_float("LLM_TIMEOUT_SECONDS", 180.0, minimum=1.0),

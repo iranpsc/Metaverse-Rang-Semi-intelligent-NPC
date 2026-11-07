@@ -35,7 +35,7 @@ DURATION = Histogram("metarang_llm_duration_seconds", "LLM/RAG generation durati
 FIRST_TOKEN = Histogram("metarang_llm_first_token_seconds", "LLM time to first token")
 ACTIVE = Gauge("metarang_llm_active_requests", "Active LLM/RAG streams")
 
-_STORE_COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}\Z")
+_STORE_COMPONENT = re.compile(r"[\w][\w-]{0,127}\Z", re.UNICODE)
 
 
 class ChatRequest(BaseModel):
@@ -45,10 +45,33 @@ class ChatRequest(BaseModel):
     model_name: str | None = Field(default=None, max_length=128)
 
 
+class VectorFilesRequest(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    file_paths: list[str] = Field(min_length=1, max_length=10)
+
+
+class VectorRSSRequest(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    rss_links: list[str] = Field(min_length=1, max_length=10)
+
+
+class VectorURLRequest(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    url: str = Field(min_length=1, max_length=4096)
+    title: str | None = Field(default=None, max_length=1000)
+
+
+class VectorRebuildRequest(BaseModel):
+    user_id: str = Field(min_length=1, max_length=128)
+    dataset_path: str = Field(min_length=1, max_length=4096)
+    vector_store_path: str = Field(min_length=1, max_length=4096)
+
+
 class Runtime:
     rag = None
     error: str | None = None
     semaphore: asyncio.Semaphore | None = None
+    vector_lock: asyncio.Lock | None = None
 
 
 runtime = Runtime()
@@ -57,6 +80,7 @@ runtime = Runtime()
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     runtime.semaphore = asyncio.Semaphore(int(os.getenv("LLM_MAX_CONCURRENT_REQUESTS", "2")))
+    runtime.vector_lock = asyncio.Lock()
     try:
         from LLM.rag_service import RAGService
 
@@ -120,6 +144,109 @@ def _user_memory_path(user_id: str) -> Path:
     # user-controlled identifier to become part of a filesystem path.
     user_key = hashlib.sha256(user_id.encode("utf-8")).hexdigest()
     return data_root() / "memories" / f"user_{user_key}"
+
+
+def _user_vector_paths(user_id: str) -> tuple[str, Path, Path, Path]:
+    safe_user = safe_identifier(user_id, fallback="anonymous", max_length=128)
+    root = data_root()
+    vector_store = root / "vectorstores" / f"user_{safe_user}" / "rss_store"
+    dataset = root / "rss_datasets" / f"user_{safe_user}" / "rss_dataset.csv"
+    uploads = root / "uploads" / f"user_{safe_user}"
+    dataset.parent.mkdir(parents=True, exist_ok=True)
+    vector_store.mkdir(parents=True, exist_ok=True)
+    uploads.mkdir(parents=True, exist_ok=True)
+    return safe_user, vector_store, dataset, uploads
+
+
+def _trusted_path(raw_path: str, *, root: Path, must_exist: bool) -> Path:
+    candidate = Path(raw_path)
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    try:
+        resolved = candidate.resolve(strict=must_exist)
+        resolved.relative_to(root.resolve())
+    except (FileNotFoundError, OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Path is outside the shared data directory") from exc
+    return resolved
+
+
+def _rag_runtime():
+    if runtime.rag is None or runtime.vector_lock is None:
+        raise HTTPException(status_code=503, detail="LLM/RAG service is not ready")
+    return runtime.rag
+
+
+@app.post("/v1/vector-stores/files")
+async def process_vector_files(payload: VectorFilesRequest) -> dict:
+    rag = _rag_runtime()
+    safe_user, vector_store, dataset, uploads = _user_vector_paths(payload.user_id)
+    paths = [
+        _trusted_path(path, root=uploads, must_exist=True)
+        for path in payload.file_paths
+    ]
+    async with runtime.vector_lock:
+        result = await asyncio.to_thread(
+            rag.process_user_files,
+            user_id=safe_user,
+            file_paths=[str(path) for path in paths],
+            dataset_path=str(dataset),
+            vector_store_path=str(vector_store),
+        )
+    return {**result, "dataset_path": str(dataset), "vector_store_path": str(vector_store)}
+
+
+@app.post("/v1/vector-stores/rss")
+async def process_vector_rss(payload: VectorRSSRequest) -> dict:
+    rag = _rag_runtime()
+    safe_user, vector_store, dataset, _ = _user_vector_paths(payload.user_id)
+    async with runtime.vector_lock:
+        result = await asyncio.to_thread(
+            rag.process_user_rss,
+            user_id=safe_user,
+            rss_links=payload.rss_links,
+            dataset_path=str(dataset),
+            vector_store_path=str(vector_store),
+        )
+    return {**result, "dataset_path": str(dataset), "vector_store_path": str(vector_store)}
+
+
+@app.post("/v1/vector-stores/url")
+async def process_vector_url(payload: VectorURLRequest) -> dict:
+    rag = _rag_runtime()
+    safe_user, vector_store, dataset, _ = _user_vector_paths(payload.user_id)
+    async with runtime.vector_lock:
+        result = await asyncio.to_thread(
+            rag.process_single_url,
+            user_id=safe_user,
+            url=payload.url,
+            dataset_path=str(dataset),
+            vector_store_path=str(vector_store),
+            title=payload.title,
+        )
+    return {**result, "dataset_path": str(dataset), "vector_store_path": str(vector_store)}
+
+
+@app.post("/v1/vector-stores/rebuild")
+async def rebuild_vector_store(payload: VectorRebuildRequest) -> dict:
+    rag = _rag_runtime()
+    root = data_root()
+    dataset = _trusted_path(payload.dataset_path, root=root, must_exist=True)
+    vector_store = _trusted_path(payload.vector_store_path, root=root, must_exist=False)
+    vector_store.mkdir(parents=True, exist_ok=True)
+    safe_user = safe_identifier(payload.user_id, fallback="system", max_length=128)
+    async with runtime.vector_lock:
+        result = await asyncio.to_thread(
+            rag.build_vector_store,
+            dataset_path=str(dataset),
+            vector_store_path=str(vector_store),
+            user_id=safe_user,
+        )
+    return {
+        **result,
+        "dataset_path": str(dataset),
+        "vector_store_path": str(vector_store),
+        "user_id": safe_user,
+    }
 
 
 @app.post("/v1/chat/stream")

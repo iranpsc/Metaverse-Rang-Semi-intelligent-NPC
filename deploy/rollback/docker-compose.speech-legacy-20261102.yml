@@ -1,0 +1,14 @@
+services:
+  tts:
+    image: metarang-npc-tts:rollback-coqui-20261102
+    pull_policy: never
+    environment:
+      # The legacy image is preserved as-built. CPU is the reliable rollback
+      # mode on this host because its bundled PyTorch could not initialize CUDA.
+      TTS_DEVICE: cpu
+
+  vc:
+    image: metarang-npc-vc:rollback-freevc-20261102
+    pull_policy: never
+    environment:
+      VC_DEVICE: cuda:0

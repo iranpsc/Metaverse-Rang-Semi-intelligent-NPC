@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import List, Optional, Dict, Generator
+import os
 import pandas as pd
 import shutil
 import json
@@ -13,6 +14,7 @@ from langchain.schema import Document
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 import logging
 
 from pipeline_core.observability import get_tracer
@@ -20,6 +22,8 @@ from pipeline_core.observability import get_tracer
 import feedparser
 import trafilatura
 from filelock import FileLock
+
+from .web_extraction import extract_web_content
 
 logger = logging.getLogger(__name__)
 tracer = get_tracer(__name__)
@@ -36,13 +40,44 @@ class VectorStoreManager:
 
     def _create_documents(self, df: pd.DataFrame) -> List[Document]:
         documents = []
-        for _, row in df.iterrows():
-            # تبدیل تمام ستون‌ها به فرمت متنی یکپارچه
-            # این بخش هوشمند است: اگر ستون جدیدی اضافه شود، خودکار هندل می‌شود
-            content_parts = [f"{str(col).replace('_', ' ').strip().title()}: {str(val)}"
-                             for col, val in row.items() if pd.notna(val) and str(val).strip() != '']
-            content = "\n".join(content_parts)
-            documents.append(Document(page_content=content, metadata={'user_id': self.user_id}))
+        chunk_size = max(256, int(os.getenv("RAG_CHUNK_SIZE", "1200")))
+        requested_overlap = max(0, int(os.getenv("RAG_CHUNK_OVERLAP", "150")))
+        chunk_overlap = min(requested_overlap, chunk_size - 1)
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            separators=["\n\n", "\n", ". ", "، ", " ", ""],
+        )
+
+        for row_number, (_, row) in enumerate(df.iterrows(), start=1):
+            values = {
+                str(column): str(value).strip()
+                for column, value in row.items()
+                if pd.notna(value) and str(value).strip()
+            }
+            article_content = values.pop("content", "")
+            source_context = "\n".join(
+                f"{column.replace('_', ' ').strip().title()}: {value}"
+                for column, value in values.items()
+            )
+            text_to_split = article_content or source_context
+            if not text_to_split:
+                continue
+
+            chunks = splitter.split_text(text_to_split)
+            for chunk_number, chunk in enumerate(chunks, start=1):
+                page_content = (
+                    f"{source_context}\nContent:\n{chunk}" if article_content and source_context else chunk
+                )
+                metadata = {
+                    "user_id": self.user_id,
+                    "row_number": row_number,
+                    "chunk_number": chunk_number,
+                }
+                for key in ("title", "link", "source_type", "feed_url"):
+                    if key in values:
+                        metadata[key] = values[key]
+                documents.append(Document(page_content=page_content, metadata=metadata))
         return documents
 
     def build(self, dataset_path: str, vector_store_path: str) -> Dict:
@@ -233,7 +268,7 @@ class RSSUpdater:
                         # دانلود و استخراج متن کامل
                         downloaded = trafilatura.fetch_url(entry.link)
                         if downloaded:
-                            full_text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+                            full_text = extract_web_content(downloaded)
                             if full_text and full_text.strip():
                                 new_entries.append({
                                     'title': getattr(entry, 'title', 'No title'),

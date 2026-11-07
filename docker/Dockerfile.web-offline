@@ -1,0 +1,11 @@
+# Emergency code-only overlay used when PyPI is unreachable. The normal
+# production image remains the root Dockerfile with requirements/web.txt.
+FROM metarang-npc-web:rollback-pre-speech-20261103
+
+USER root
+WORKDIR /app
+COPY --chown=app:app . .
+RUN mkdir -p /app/runtime /app/staticfiles /app/data /app/media \
+    && chown -R app:app /app/runtime /app/staticfiles /app/data /app/media \
+    && chmod +x /app/entrypoint.sh
+USER app

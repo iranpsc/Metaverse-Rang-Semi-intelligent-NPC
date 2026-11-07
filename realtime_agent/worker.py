@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
 import uuid
 
@@ -16,6 +15,7 @@ from prometheus_client import Counter, Gauge, Histogram
 from pipeline_core.config import AgentSettings
 from pipeline_core.contracts import PipelineErrorEvent, PipelineStateEvent, TranscriptionEvent
 from pipeline_core.observability import configure_observability, get_tracer
+from pipeline_core.sentence_buffer import SentenceBuffer
 
 from .audio import EndpointConfig, EnergyEndpointDetector, pcm_frames, wav_to_pcm16_mono
 from .client import PipelineClient, PipelineServiceError
@@ -43,35 +43,6 @@ JOB_DURATION = Histogram(
 )
 
 server = AgentServer(prometheus_port=settings.metrics_port)
-
-
-class SentenceBuffer:
-    def __init__(self, max_chars: int = 280):
-        self.text = ""
-        self.max_chars = max_chars
-
-    def push(self, chunk: str) -> list[str]:
-        self.text += chunk.replace("[END]", "")
-        ready: list[str] = []
-        while self.text:
-            match = re.search(r"[.!?؟\n]", self.text)
-            if match:
-                end = match.end()
-            elif len(self.text) >= self.max_chars:
-                split_at = self.text.rfind(" ", 0, self.max_chars)
-                end = split_at if split_at > 0 else self.max_chars
-            else:
-                break
-            sentence = self.text[:end].strip()
-            self.text = self.text[end:].lstrip()
-            if sentence:
-                ready.append(sentence)
-        return ready
-
-    def finish(self) -> str:
-        value = self.text.replace("[END]", "").strip()
-        self.text = ""
-        return value
 
 
 async def accept_request(request: JobRequest) -> None:
@@ -224,6 +195,21 @@ async def handle_turn(
                                         "session_id": session_id,
                                         "turn_id": turn_id,
                                     },
+                                )
+                                await send_event(
+                                    ctx,
+                                    destination,
+                                    PipelineErrorEvent.create(
+                                        session_id=session_id,
+                                        turn_id=turn_id,
+                                        stage="voice_conversion",
+                                        code="voice_conversion_fallback",
+                                        message=(
+                                            "Voice conversion failed; the original TTS audio "
+                                            "is being played."
+                                        ),
+                                        recoverable=True,
+                                    ),
                                 )
                         if not speaking_sent:
                             await send_event(

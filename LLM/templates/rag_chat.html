@@ -127,6 +127,20 @@
         opacity: 0.5;
     }
 
+    #tts-controls {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 10px 15px;
+        background: white;
+        font-size: 0.9rem;
+    }
+    #tts-controls button { padding: 6px 10px; }
+    #tts-status[data-state="error"] { color: #b42318; }
+    #tts-status[data-state="warning"] { color: #945600; }
+    #tts-audio { width: 100%; }
+
     #vc-bar {
         display: flex;
         align-items: center;
@@ -412,7 +426,14 @@
                 placeholder="سوال خود را بنویسید و Enter بزنید..."
             />
             <button id="send-btn">ارسال</button>
-            <button id="voice-btn" title="پخش صوتی پاسخ">🔊</button>
+            <button id="voice-btn" type="button" aria-pressed="true">🔊 صدا روشن</button>
+        </div>
+
+        <div id="tts-controls" dir="rtl">
+            <button id="voice-test-btn" type="button">آزمایش صدا</button>
+            <button id="voice-replay-btn" type="button" disabled>پخش پاسخ</button>
+            <span id="tts-status" role="status" aria-live="polite"></span>
+            <audio id="tts-audio" controls preload="none" hidden aria-label="پخش صدای پاسخ"></audio>
         </div>
 
         <div id="vc-bar">
@@ -706,6 +727,10 @@
 
     // --- TTS: پخش صوتی جمله‌به‌جمله پاسخ در حین استریم ---
     const voiceBtn = document.getElementById("voice-btn");
+    const voiceTestBtn = document.getElementById("voice-test-btn");
+    const voiceReplayBtn = document.getElementById("voice-replay-btn");
+    const ttsStatusEl = document.getElementById("tts-status");
+    const ttsAudioEl = document.getElementById("tts-audio");
     let ttsEnabled = localStorage.getItem("ttsEnabled") !== "off";
     let ttsSentenceBuffer = "";                 // streamed tokens not yet forming a full sentence
     let ttsPendingChunk = "";                   // completed sentences waiting to reach batch size
@@ -713,20 +738,77 @@
     let ttsPlaybackQueue = Promise.resolve();   // plays audio clips strictly in order
     let ttsGeneration = 0;                      // bumped to discard queued audio from a previous message
     let ttsCurrentAudio = null;
+    let ttsAudioContext = null;
+    let ttsCurrentSource = null;
+    let ttsAudioReady = Promise.resolve();
+    let ttsAudioUrl = null;
+    let ttsPlaybackCancel = null;
+    let ttsPreferHtmlAudio = false;
+    let ttsPendingClips = 0;
+    let ttsLastError = "";
+    let ttsLastWarning = "";
+    let lastAssistantReply = "";
+    const ttsRequests = new Set();
     const TTS_BATCH_MIN_CHARS = 120;            // after the first sentence, batch this much text per request
 
     function updateVoiceBtn() {
-        voiceBtn.textContent = ttsEnabled ? "🔊" : "🔇";
+        voiceBtn.textContent = ttsEnabled ? "🔊 صدا روشن" : "🔇 صدا خاموش";
         voiceBtn.classList.toggle("muted", !ttsEnabled);
-        voiceBtn.title = ttsEnabled ? "قطع صدا" : "پخش صوتی پاسخ";
+        voiceBtn.title = ttsEnabled ? "خاموش کردن خواندن خودکار پاسخ‌ها" : "روشن کردن خواندن خودکار پاسخ‌ها";
+        voiceBtn.setAttribute("aria-pressed", String(ttsEnabled));
     }
     updateVoiceBtn();
+
+    function ttsSetStatus(message, state = "ready") {
+        ttsStatusEl.textContent = message;
+        ttsStatusEl.dataset.state = state;
+    }
+    ttsSetStatus(ttsEnabled ? "خواندن خودکار پاسخ‌ها روشن است" : "صدا خاموش است؛ برای شنیدن پاسخ، صدا را روشن کنید");
+
+    // Voice conversion adds enough latency for browsers to lose their temporary
+    // user-activation permission. Keep one AudioContext unlocked from the click/
+    // key event and use it for all delayed TTS/VC clips.
+    function ttsUnlockAudio() {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return null;
+        try {
+            if (!ttsAudioContext || ttsAudioContext.state === "closed") {
+                ttsAudioContext = new AudioContextClass();
+            }
+            ttsAudioReady = ttsAudioContext.state === "running"
+                ? Promise.resolve() : ttsAudioContext.resume();
+            ttsAudioReady.catch(error => console.warn("Could not unlock TTS audio", error));
+            return ttsAudioContext;
+        } catch (error) {
+            console.warn("Web Audio unavailable; using the audio player", error);
+            return null;
+        }
+    }
 
     voiceBtn.addEventListener("click", () => {
         ttsEnabled = !ttsEnabled;
         localStorage.setItem("ttsEnabled", ttsEnabled ? "on" : "off");
-        if (!ttsEnabled) ttsStopPlayback();
+        if (ttsEnabled) ttsUnlockAudio();
+        else ttsStopPlayback();
         updateVoiceBtn();
+        ttsSetStatus(ttsEnabled ? "خواندن خودکار پاسخ‌ها روشن است" : "صدا خاموش است");
+    });
+
+    function ttsStartFromClick(text) {
+        ttsEnabled = true;
+        localStorage.setItem("ttsEnabled", "on");
+        updateVoiceBtn();
+        ttsStopPlayback();
+        ttsUnlockAudio();
+        // Explicit test/replay actions use visible native controls, including
+        // volume and a play button if this browser blocks delayed autoplay.
+        ttsPreferHtmlAudio = true;
+        ttsFeed(text);
+        ttsFlush();
+    }
+    voiceTestBtn.addEventListener("click", () => ttsStartFromClick("سلام، صدای پاسخ‌ها فعال است."));
+    voiceReplayBtn.addEventListener("click", () => {
+        if (lastAssistantReply) ttsStartFromClick(lastAssistantReply);
     });
 
     // --- Voice Conversion: re-voice the spoken reply to a recorded sample ---
@@ -749,6 +831,7 @@
     async function loadVoiceSamples() {
         try {
             const res = await fetch("{% url 'voice_samples_api' %}");
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             const samples = data.samples || [];
             vcSelectEl.innerHTML = '<option value="">— انتخاب نمونه صدا —</option>';
@@ -770,6 +853,7 @@
             updateVcUI();
         } catch (e) {
             console.error("Failed to load voice samples", e);
+            vcInfoEl.textContent = "دریافت نمونه‌های صدا انجام نشد؛ صفحه را دوباره بارگذاری کنید";
         }
     }
 
@@ -782,6 +866,7 @@
             localStorage.setItem("ttsEnabled", "on");
             updateVoiceBtn();
         }
+        if (vcEnabled) ttsUnlockAudio();
         updateVcUI();
     });
 
@@ -793,18 +878,25 @@
     });
 
     // If VC is on with a chosen sample, convert the TTS clip to that voice.
-    // Any failure falls back to the original TTS audio so playback never breaks.
-    async function ttsMaybeConvert(blob) {
-        if (!blob || !vcEnabled || !vcSampleId) return blob;
+    // Keep speaking on conversion failures, but make the fallback explicit.
+    async function ttsMaybeConvert(blob, signal, sampleId) {
+        if (!sampleId) return { blob };
         try {
             const res = await fetch(
-                "{% url 'vc_convert_api' %}?sample_id=" + encodeURIComponent(vcSampleId),
-                { method: "POST", headers: { "Content-Type": "audio/wav" }, body: blob }
+                "{% url 'vc_convert_api' %}?sample_id=" + encodeURIComponent(sampleId),
+                { method: "POST", headers: { "Content-Type": "audio/wav" }, body: blob, signal }
             );
-            if (!res.ok) return blob;
-            return await res.blob();
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            if (!res.headers.get("Content-Type")?.toLowerCase().startsWith("audio/")) {
+                throw new Error("پاسخ صوتی نامعتبر");
+            }
+            const converted = await res.blob();
+            if (!converted.size) throw new Error("فایل صوتی خالی");
+            return { blob: converted };
         } catch (e) {
-            return blob;
+            if (signal.aborted) throw e;
+            console.warn("Voice conversion failed; playing the original voice", e);
+            return { blob, warning: `تبدیل صدا انجام نشد؛ پاسخ با صدای اصلی پخش می‌شود (${e.message})` };
         }
     }
 
@@ -817,10 +909,89 @@
         ttsPendingChunk = "";
         ttsFirstChunkSent = false;
         ttsPlaybackQueue = Promise.resolve();
-        if (ttsCurrentAudio) {
-            ttsCurrentAudio.pause();
-            ttsCurrentAudio = null;
+        ttsPendingClips = 0;
+        ttsLastError = "";
+        ttsLastWarning = "";
+        ttsPreferHtmlAudio = false;
+        ttsRequests.forEach(controller => controller.abort());
+        ttsRequests.clear();
+        ttsAudioEl.pause();
+        if (ttsPlaybackCancel) ttsPlaybackCancel();
+        ttsCurrentAudio = null;
+        if (ttsCurrentSource) {
+            try { ttsCurrentSource.stop(); } catch (e) { /* already stopped */ }
+            ttsCurrentSource = null;
         }
+        ttsAudioEl.hidden = true;
+    }
+
+    async function ttsPlayBlob(blob, generation) {
+        const context = ttsUnlockAudio();
+        if (context && !ttsPreferHtmlAudio) {
+            try {
+                await Promise.race([
+                    ttsAudioReady,
+                    new Promise((_, reject) => setTimeout(() => reject(new Error("Audio resume timed out")), 1500)),
+                ]);
+                if (generation !== ttsGeneration || !ttsEnabled) return;
+                if (context.state !== "running") throw new Error("Audio context is not running");
+                const encodedAudio = await blob.arrayBuffer();
+                const audioBuffer = await context.decodeAudioData(encodedAudio.slice(0));
+                if (generation !== ttsGeneration || !ttsEnabled) return;
+                ttsSetStatus("در حال پخش صدا…", "playing");
+                await new Promise((resolve) => {
+                    const source = context.createBufferSource();
+                    source.buffer = audioBuffer;
+                    source.connect(context.destination);
+                    ttsCurrentSource = source;
+                    source.onended = () => {
+                        if (ttsCurrentSource === source) ttsCurrentSource = null;
+                        resolve();
+                    };
+                    source.start(0);
+                });
+                return;
+            } catch (error) {
+                console.warn("Using native audio playback", error);
+                ttsPreferHtmlAudio = true;
+            }
+        }
+        if (generation !== ttsGeneration || !ttsEnabled) return;
+        // Retain the actual audio and controls when autoplay is blocked. The
+        // queue waits for manual playback instead of silently discarding clips.
+        await new Promise((resolve, reject) => {
+            const audio = ttsAudioEl;
+            if (ttsAudioUrl) URL.revokeObjectURL(ttsAudioUrl);
+            ttsAudioUrl = URL.createObjectURL(blob);
+            audio.src = ttsAudioUrl;
+            audio.hidden = false;
+            ttsCurrentAudio = audio;
+            let finished = false;
+            const finish = (error) => {
+                if (finished) return;
+                finished = true;
+                audio.onended = audio.onerror = audio.onplaying = null;
+                if (ttsCurrentAudio === audio) ttsCurrentAudio = null;
+                if (ttsPlaybackCancel === cancel) ttsPlaybackCancel = null;
+                if (error) reject(error);
+                else resolve();
+            };
+            const cancel = () => finish();
+            ttsPlaybackCancel = cancel;
+            audio.onended = () => finish();
+            audio.onerror = () => finish(new Error("مرورگر نتوانست فایل صوتی را پخش کند؛ دوباره آزمایش صدا را بزنید"));
+            audio.onplaying = () => {
+                if (generation === ttsGeneration) ttsSetStatus("در حال پخش صدا…", "playing");
+            };
+            audio.play().catch((error) => {
+                if (generation !== ttsGeneration) return finish();
+                if (error.name === "NotAllowedError") {
+                    ttsSetStatus("پخش خودکار مسدود شد؛ دکمهٔ پخش فایل صوتی زیر را بزنید", "blocked");
+                } else {
+                    finish(new Error("پخش فایل صوتی انجام نشد؛ دوباره آزمایش صدا را بزنید"));
+                }
+            });
+        });
     }
 
     // Strip markdown so symbols aren't read aloud
@@ -838,27 +1009,51 @@
         const clean = ttsCleanText(sentence);
         if (clean.length < 2) return;
         const gen = ttsGeneration;
+        const sampleId = vcEnabled ? vcSampleId : "";
+        ttsPendingClips++;
+        if (ttsStatusEl.dataset.state !== "playing") ttsSetStatus("در حال آماده‌سازی صدا…", "loading");
+        const controller = new AbortController();
+        ttsRequests.add(controller);
+        const timeout = setTimeout(() => controller.abort(), 125000);
         // Start synthesis right away; the queue only enforces playback order
         const audioBlobPromise = fetch("{% url 'tts_api' %}", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ text: clean }),
-        }).then(r => (r.ok ? r.blob() : null))
-          .then(ttsMaybeConvert)   // re-voice to the selected sample when VC is on
-          .catch(() => null);
+            signal: controller.signal,
+        }).then(async (r) => {
+            if (!r.ok) throw new Error(`تولید صدا انجام نشد (HTTP ${r.status})؛ دوباره آزمایش صدا را بزنید`);
+            if (!r.headers.get("Content-Type")?.toLowerCase().startsWith("audio/")) {
+                throw new Error("سرور فایل صوتی معتبری برنگرداند؛ دوباره آزمایش صدا را بزنید");
+            }
+            return r.blob();
+        })
+          .then(blob => ttsMaybeConvert(blob, controller.signal, sampleId))
+          .catch(error => ({ error }))
+          .finally(() => { clearTimeout(timeout); ttsRequests.delete(controller); });
 
-        ttsPlaybackQueue = ttsPlaybackQueue.then(async () => {
-            const blob = await audioBlobPromise;
-            if (!blob || gen !== ttsGeneration || !ttsEnabled) return;
-            await new Promise((resolve) => {
-                const url = URL.createObjectURL(blob);
-                const audio = new Audio(url);
-                ttsCurrentAudio = audio;
-                const finish = () => { URL.revokeObjectURL(url); resolve(); };
-                audio.onended = finish;
-                audio.onerror = finish;
-                audio.play().catch(finish);
-            });
+        ttsPlaybackQueue = ttsPlaybackQueue.catch(() => undefined).then(async () => {
+            try {
+                const result = await audioBlobPromise;
+                if (gen !== ttsGeneration || !ttsEnabled) return;
+                if (result.error) throw result.error;
+                if (result.warning) ttsLastWarning = result.warning;
+                await ttsPlayBlob(result.blob, gen);
+            } catch (error) {
+                console.error("TTS/VC playback failed", error);
+                if (gen === ttsGeneration) {
+                    ttsLastError = error.name === "AbortError"
+                        ? "آماده‌سازی صدا بیش از حد طول کشید؛ دوباره آزمایش صدا را بزنید"
+                        : error instanceof TypeError
+                            ? "دریافت صدا انجام نشد؛ اتصال را بررسی کنید و دوباره آزمایش صدا را بزنید" : error.message;
+                    ttsSetStatus(ttsLastError, "error");
+                }
+            } finally {
+                if (gen === ttsGeneration && --ttsPendingClips === 0) {
+                    ttsSetStatus(ttsLastError || ttsLastWarning || "پخش صدا تمام شد",
+                        ttsLastError ? "error" : ttsLastWarning ? "warning" : "ready");
+                }
+            }
         });
     }
 
@@ -956,7 +1151,11 @@
             ttsFeed(data.token);
 
             // Convert raw text to Markdown and update HTML
-            currentBotMessage.innerHTML = marked.parse(currentRawText);
+            if (typeof window.marked?.parse === "function") {
+                currentBotMessage.innerHTML = window.marked.parse(currentRawText);
+            } else {
+                currentBotMessage.textContent = currentRawText;
+            }
             
             // Force DOM update and scroll
             void currentBotMessage.offsetHeight;
@@ -964,6 +1163,8 @@
         } else if (data.type === "done") {
             console.log("Stream completed. Total chunks:", data.chunk_count);
             ttsFlush();
+            lastAssistantReply = currentRawText.trim();
+            voiceReplayBtn.disabled = !lastAssistantReply;
             if (currentThinking && currentThinking.parentNode) {
                 chatBox.removeChild(currentThinking);
             }
@@ -976,6 +1177,7 @@
             currentAbortController = null;
         } else if (data.type === "error") {
             ttsStopPlayback();
+            voiceReplayBtn.disabled = !lastAssistantReply;
             if (currentThinking && currentThinking.parentNode) {
                 chatBox.removeChild(currentThinking);
             }
@@ -997,6 +1199,10 @@
     async function sendMessage() {
         const text = messageInput.value.trim();
         if (!text) return;
+
+        // This runs synchronously inside the user's click/Enter event, before the
+        // network requests introduce the delay that used to trigger autoplay blocking.
+        if (ttsEnabled) ttsUnlockAudio();
         
         // Cancel any ongoing request
         if (currentAbortController) {
@@ -1005,6 +1211,7 @@
 
         // Stop any speech left over from the previous answer
         ttsStopPlayback();
+        voiceReplayBtn.disabled = true;
 
         // نمایش پیام کاربر
         addMessage(text, "user");
@@ -1119,6 +1326,7 @@
             }
             
             console.error("Error sending message:", error);
+            voiceReplayBtn.disabled = !lastAssistantReply;
             
             // Clean up UI on error
             if (currentThinking && currentThinking.parentNode) {
@@ -1231,7 +1439,7 @@
     kbFileInput.click();
     }
 
-    kbFileInput.addEventListener("change", () => {
+    kbFileInput?.addEventListener("change", () => {
     selectedFilesDiv.innerHTML = "";
     statusDiv.textContent = "";
 

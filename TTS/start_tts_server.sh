@@ -1,5 +1,6 @@
 #!/bin/bash
-# Starts the TTS microservice inside its dedicated venv (TTS/tts/).
-# Run in the background with:  nohup ./start_tts_server.sh > tts_server.log 2>&1 &
-cd "$(dirname "$0")"
-exec ./tts/bin/python3 tts_server.py "$@"
+# Starts Mana Persian Piper from the current Python environment.
+# Production should use Compose. For local use:
+#   nohup ./TTS/start_tts_server.sh > tts_server.log 2>&1 &
+cd "$(dirname "$0")/.."
+exec python TTS/tts_server.py "$@"

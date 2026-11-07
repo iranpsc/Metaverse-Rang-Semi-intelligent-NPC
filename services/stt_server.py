@@ -37,6 +37,7 @@ class TranscriptionJob:
 class WhisperRuntime:
     def __init__(self) -> None:
         self.model = None
+        self.device = "cpu"
         self.error: str | None = None
         self.queue: asyncio.Queue[TranscriptionJob | None] = asyncio.Queue(
             maxsize=int(os.getenv("STT_QUEUE_SIZE", "8"))
@@ -52,12 +53,24 @@ class WhisperRuntime:
         device = (
             "cuda" if torch.cuda.is_available() else "cpu"
         ) if requested_device == "auto" else requested_device
+        if requested_device not in {"auto", "cuda", "cpu"}:
+            self.error = "InvalidDeviceConfiguration"
+            logger.error("WHISPER_DEVICE must be one of: auto, cuda, cpu")
+            return
+        if device == "cuda" and not torch.cuda.is_available():
+            self.error = "CUDAUnavailable"
+            logger.error(
+                "WHISPER_DEVICE=cuda, but CUDA is unavailable in the STT container",
+                extra={"event": "cuda_unavailable"},
+            )
+            return
         try:
             self.model = await asyncio.to_thread(whisper.load_model, model_name, device=device)
         except Exception as exc:
             self.error = type(exc).__name__
             logger.exception("Whisper model failed to load", extra={"event": "model_load_failed"})
             return
+        self.device = device
         count = int(os.getenv("STT_INFERENCE_WORKERS", "1"))
         self.workers = [
             asyncio.create_task(self._worker(), name=f"stt-inference-{i}") for i in range(count)
@@ -81,7 +94,7 @@ class WhisperRuntime:
                 result = await asyncio.to_thread(
                     self.model.transcribe,
                     samples,
-                    fp16=False,
+                    fp16=self.device == "cuda",
                     temperature=0.0,
                     no_speech_threshold=float(os.getenv("WHISPER_NO_SPEECH_THRESHOLD", "0.6")),
                 )

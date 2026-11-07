@@ -244,6 +244,7 @@
   const LIST_URL = "{% url 'voice_samples_api' %}";
   const CREATE_URL = "{% url 'voice_samples_api' %}";
   const DELETE_URL = (id) => `/api/voice-samples/${id}/delete/`;
+  const MAX_SAMPLE_BYTES = {{ max_voice_sample_bytes }};
 
   const nameInput = document.getElementById("vs-name");
   const startBtn = document.getElementById("vs-start");
@@ -351,6 +352,10 @@
     const name = nameInput.value.trim();
     if (!name) { statusEl.textContent = "Please enter a label first."; nameInput.focus(); return; }
     if (!recordedBlob) { statusEl.textContent = "Record a clip first."; return; }
+    if (recordedBlob.size > MAX_SAMPLE_BYTES) {
+      statusEl.textContent = "Recording is too large. Please record a shorter clip.";
+      return;
+    }
 
     const ext = recordedMime.includes("ogg") ? "ogg" : recordedMime.includes("mp4") ? "m4a" : "webm";
     const form = new FormData();
@@ -361,27 +366,37 @@
     statusEl.textContent = "Saving…";
     try {
       const res = await fetch(CREATE_URL, { method: "POST", body: form });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "save failed");
-      statusEl.innerHTML = `✅ Saved <strong>${data.sample.name}</strong>.`;
+      const data = await readApiResponse(res);
       nameInput.value = "";
       resetRecorder();
+      statusEl.textContent = `✅ Saved ${data.sample.name}.`;
       loadSamples();
     } catch (err) {
       console.error(err);
-      statusEl.textContent = `Error: ${err.message}`;
+      statusEl.textContent = err instanceof TypeError
+        ? "Could not reach the server while uploading. Your recording is still available; check your connection and try saving again."
+        : `Error: ${err.message}`;
       saveBtn.disabled = false;
     }
+  }
+
+  async function readApiResponse(res) {
+    const data = await res.json().catch(() => null);
+    if (!res.ok) {
+      if (res.status === 413) {
+        throw new Error("The server rejected the recording size. Please record a shorter clip or ask the administrator to increase the upload limit.");
+      }
+      throw new Error(data?.error || `Server returned HTTP ${res.status}. Please try again.`);
+    }
+    if (!data) throw new Error("The server returned an invalid response. Please refresh the sample list before retrying.");
+    return data;
   }
 
   async function deleteSample(id, name) {
     if (!confirm(`Delete voice sample "${name}"?`)) return;
     try {
       const res = await fetch(DELETE_URL(id), { method: "POST" });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "delete failed");
-      }
+      await readApiResponse(res);
       loadSamples();
     } catch (err) {
       alert(`Error: ${err.message}`);
@@ -397,7 +412,7 @@
   async function loadSamples() {
     try {
       const res = await fetch(LIST_URL);
-      const data = await res.json();
+      const data = await readApiResponse(res);
       const samples = data.samples || [];
       if (samples.length === 0) {
         tbody.innerHTML = '<tr><td colspan="4" class="vs-empty">No voice samples yet. Record one above.</td></tr>';

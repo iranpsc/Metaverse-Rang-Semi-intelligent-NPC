@@ -1,0 +1,15 @@
+{
+  "engine": "Mana Persian Piper",
+  "repository": "MahtaFetrat/Mana-Persian-Piper",
+  "revision": "ad9dd8518bedf517bd7cbc9f63b8e5c844bf5bc0",
+  "license": "MIT",
+  "files": {
+    "fa_IR-mana-medium.onnx": "e390c0e74ba71fd97c49ba662ee0c6e1724b462ba2d4561698af4f564840f126",
+    "fa_IR-mana-medium.onnx.json": "d102276a05436613a05e1fbad8f125abcf8f56759aaf4fd36adf216653949997"
+  },
+  "runtime": {
+    "package": "piper-tts==1.2.0",
+    "license": "MIT",
+    "execution_provider": "CPUExecutionProvider"
+  }
+}

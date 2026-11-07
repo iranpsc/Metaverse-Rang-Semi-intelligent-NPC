@@ -1,0 +1,27 @@
+{
+  "tests": {
+    "command": "python3 -m unittest tests.test_persian_text tests.test_sentence_buffer -q",
+    "passed": 28,
+    "environments": ["workspace Python", "rebuilt TTS container"]
+  },
+  "audio": {
+    "before_after_pairs": 5,
+    "checks": ["valid mono PCM16 WAV", "non-silent samples", "diacritics change phoneme output"],
+    "human_listening_evaluation": false
+  },
+  "running_service": {
+    "tts": "healthy",
+    "agent-worker": "healthy",
+    "synthesis_http_status": 200,
+    "sample_rate": 22050,
+    "normalization_ms_single_smoke_request": 0.461,
+    "oversized_input_http_status": 400
+  },
+  "deployment": {
+    "mode": "offline source overlay on installed runtime",
+    "tts_image": "sha256:238226b0eddd752bc5ae1b031c0f3fc974061faad53245d72803198e46870b86",
+    "agent_worker_image": "sha256:ea5e1491d50f3510c273604f26c2ebc0a660be275d2f264f577060862a02d844",
+    "backup_images": ["metarang-npc-tts:before-normalization", "metarang-npc-agent-worker:before-normalization"]
+  },
+  "limitations": ["selective lexicon diacritization, not full contextual diacritization", "unknown ambiguous words are not guessed"]
+}

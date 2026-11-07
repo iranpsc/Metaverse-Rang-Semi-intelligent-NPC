@@ -48,7 +48,7 @@ Many corporate networks allow TLS only on TCP 443. For that strongest fallback, 
 2. Set `DJANGO_DEBUG=false`, a random `DJANGO_SECRET_KEY`, exact `DJANGO_ALLOWED_HOSTS`, `DJANGO_CSRF_TRUSTED_ORIGINS`, and `CORS_ALLOWED_ORIGINS`.
 3. Set a distinct LiveKit API key and a secret of at least 32 random characters.
 4. Provision model files and the Ollama model before marking the deployment ready.
-5. Install NVIDIA Container Toolkit and verify `docker run --gpus all ... nvidia-smi` before enabling FreeVC.
+5. Install NVIDIA Container Toolkit and verify `docker run --gpus all ... nvidia-smi` before enabling OpenVoice V2. Mana Piper itself is CPU-only.
 6. Put certificates at `TLS_CERTS_DIR` with read-only permissions accessible to the containers.
 7. Open/forward the documented ports and confirm the host has no conflicting Redis, RTC, or TURN listeners.
 8. Run `make config`, then `make production-up`.
@@ -67,3 +67,52 @@ Do not expose STT, LLM/RAG, TTS, VC, Redis, Ollama, Tempo, or Loki directly to t
 Use `make down` for normal termination. The worker CLI drains/cancels jobs on SIGTERM, and each job cancels its audio/turn tasks and closes HTTP/LiveKit resources. Rooms have empty/departure timeouts as a second cleanup layer.
 
 Back up the Django runtime volume, pipeline data/vector stores, Ollama data, Grafana data, and any voice samples before upgrades. Image tags are pinned; test version updates with `make config`, unit tests, and the smoke client before deployment.
+
+## Chat reports that the LLM/RAG service is unavailable
+
+For automatic recovery of GPU startup and service health failures, see
+[Automatic GPU service recovery](GPU_AUTO_RECOVERY.md).
+
+Check the existing model containers before rebuilding the application:
+
+```sh
+docker compose ps -a ollama llm
+docker inspect --format '{{.State.Error}}' "$(docker compose ps -aq ollama)" "$(docker compose ps -aq llm)"
+```
+
+If Docker reports that `/dev/nvidia-uvm` is missing, initialize the NVIDIA
+device nodes on the host before starting the containers:
+
+```sh
+nvidia-modprobe -u -c=0
+nvidia-smi
+docker compose start ollama llm
+```
+
+The recovery uses the existing containers, models, and data. Wait for both
+containers to become healthy, then check connectivity from Django:
+
+```sh
+docker compose exec -T web python -c "import requests; r = requests.get('http://llm:5004/health/ready', timeout=5); print(r.status_code, r.text); r.raise_for_status()"
+```
+
+The same missing GPU device can leave TTS, STT, and voice conversion stopped.
+Restoring Ollama and RAG restores text replies only. Check the speech services
+with `docker compose --profile voice-conversion ps -a tts stt vc` and start
+the services needed by the enabled features. For spoken replies and a selected
+sample voice:
+
+```sh
+docker compose start tts
+docker compose --profile voice-conversion start vc
+```
+
+Wait for readiness, then POST a short Persian sentence as `{"text":"سلام"}`
+to `/api/tts/`. Expect HTTP 200 and a non-silent `audio/wav` response. When
+voice conversion is enabled, also POST that WAV to `/api/vc/?sample_id=<id>`
+and verify it returns a valid WAV.
+
+Verify a chat request returns token events and a final `done` event. HTTP 200
+alone is insufficient because the chat endpoint can report an error inside
+the event stream. If the device-node failure recurs after a reboot, configure
+host startup to initialize NVIDIA devices before Docker starts GPU services.

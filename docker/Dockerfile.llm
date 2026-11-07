@@ -10,6 +10,10 @@ RUN groupadd --system app && useradd --system --gid app --home /app app
 COPY --from=builder /wheels /wheels
 COPY requirements requirements
 RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements/llm.txt && rm -rf /wheels
+# File ingestion moved from Django into this service. Keep these lightweight
+# readers in a separate layer so changing them does not rebuild the CUDA/Torch
+# dependency wheel layer above.
+RUN pip install --no-cache-dir pypdf==6.19.0 python-docx==1.2.0
 WORKDIR /app
 COPY --chown=app:app LLM LLM
 COPY --chown=app:app pipeline_core pipeline_core

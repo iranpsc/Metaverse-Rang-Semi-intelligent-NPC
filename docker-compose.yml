@@ -23,6 +23,9 @@ services:
     command: ["--config", "/etc/livekit.yaml"]
     environment:
       LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+      # When set, this is the address advertised in ICE candidates. Supplying
+      # it avoids leaking an unreachable Docker bridge address to remote SDKs.
+      NODE_IP: ${LIVEKIT_NODE_IP:-}
     volumes:
       - ./deploy/livekit/livekit.dev.yaml:/etc/livekit.yaml:ro
     ports:
@@ -50,6 +53,20 @@ services:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       DATABASE_PATH: /app/runtime/db.sqlite3
       DATA_ROOT: /app/data
+      VECTOR_STORE_MAX_FILES: ${VECTOR_STORE_MAX_FILES:-10}
+      VECTOR_STORE_MAX_RSS_LINKS: ${VECTOR_STORE_MAX_RSS_LINKS:-10}
+      VECTOR_STORE_MAX_UPLOAD_BYTES: ${VECTOR_STORE_MAX_UPLOAD_BYTES:-26214400}
+      VOICE_SAMPLE_MAX_UPLOAD_BYTES: ${VOICE_SAMPLE_MAX_UPLOAD_BYTES:-26214400}
+      VOICE_SAMPLE_MIN_DURATION_SECONDS: ${VOICE_SAMPLE_MIN_DURATION_SECONDS:-1}
+      VOICE_SAMPLE_MAX_DURATION_SECONDS: ${VOICE_SAMPLE_MAX_DURATION_SECONDS:-60}
+      VOICE_SAMPLE_MIN_VOICED_SECONDS: ${VOICE_SAMPLE_MIN_VOICED_SECONDS:-0.8}
+      VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS: ${VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS:-30}
+      VC_SAMPLE_VALIDATION_TIMEOUT_SECONDS: ${VC_SAMPLE_VALIDATION_TIMEOUT_SECONDS:-3}
+      SPEECH_JOB_RETENTION_SECONDS: ${SPEECH_JOB_RETENTION_SECONDS:-3600}
+      SPEECH_TEXT_MAX_LENGTH: ${SPEECH_TEXT_MAX_LENGTH:-2000}
+      TTS_TIMEOUT_SECONDS: ${TTS_TIMEOUT_SECONDS:-120}
+      VC_TIMEOUT_SECONDS: ${VC_TIMEOUT_SECONDS:-120}
+      VC_FAILURE_FALLBACK: ${VC_FAILURE_FALLBACK:-false}
       MEDIA_ROOT: /app/media
       REDIS_URL: redis://redis:6379/0
       REDIS_SOCKET_TIMEOUT_SECONDS: ${REDIS_SOCKET_TIMEOUT_SECONDS:-5}
@@ -63,9 +80,16 @@ services:
       OLLAMA_REQUEST_TIMEOUT_SECONDS: ${OLLAMA_REQUEST_TIMEOUT_SECONDS:-180}
       EMBEDDING_MODEL_PATH: /models/sentence_embeddings
       LLM_MODEL: ${LLM_MODEL:-dorna2}
-      LLM_USE_GPU: ${LLM_USE_GPU:-false}
+      # Django is the control/UI plane and must never load model weights.
+      LLM_USE_GPU: "false"
+      STT_SERVER_URL: http://stt:5001
+      LLM_SERVER_URL: http://llm:5004
       TTS_SERVER_URL: http://tts:5002
       VC_SERVER_URL: http://vc:5003
+      STT_MODEL_NAME: ${WHISPER_MODEL:-large}
+      STT_TIMEOUT_SECONDS: ${STT_TIMEOUT_SECONDS:-120}
+      LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-180}
+      LLM_OPERATION_TIMEOUT_SECONDS: ${LLM_OPERATION_TIMEOUT_SECONDS:-600}
     volumes:
       - django_runtime:/app/runtime
       - staticfiles:/app/staticfiles
@@ -82,6 +106,12 @@ services:
         condition: service_healthy
       livekit:
         condition: service_started
+      stt:
+        condition: service_healthy
+      llm:
+        condition: service_healthy
+      tts:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/live/', timeout=2).read()"]
       interval: 15s
@@ -97,13 +127,21 @@ services:
     environment:
       <<: *observability-env
       WHISPER_MODEL: ${WHISPER_MODEL:-turbo}
-      WHISPER_DEVICE: ${WHISPER_DEVICE:-auto}
+      # Fail model startup instead of silently falling back to CPU when the
+      # NVIDIA runtime is unavailable.
+      WHISPER_DEVICE: ${WHISPER_DEVICE:-cuda}
       STT_QUEUE_SIZE: ${STT_QUEUE_SIZE:-8}
       STT_INFERENCE_WORKERS: ${STT_INFERENCE_WORKERS:-1}
       XDG_CACHE_HOME: /cache
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - stt_cache:/cache
     expose: ["5001"]
+    runtime: nvidia
+    devices:
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5001/health/ready', timeout=2).read()"]
       interval: 20s
@@ -114,9 +152,16 @@ services:
 
   ollama:
     image: ollama/ollama:0.32.5
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - ollama_data:/root/.ollama
     expose: ["11434"]
+    runtime: nvidia
+    devices:
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 10s
@@ -134,7 +179,9 @@ services:
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_REQUEST_TIMEOUT_SECONDS: ${OLLAMA_REQUEST_TIMEOUT_SECONDS:-180}
       LLM_MODEL: ${LLM_MODEL:-dorna2}
-      LLM_USE_GPU: ${LLM_USE_GPU:-false}
+      LLM_USE_GPU: ${LLM_USE_GPU:-true}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
       EMBEDDING_MODEL_PATH: /models/sentence_embeddings
       LLM_MAX_CONCURRENT_REQUESTS: ${LLM_MAX_CONCURRENT_REQUESTS:-2}
       LLM_STREAM_QUEUE_SIZE: ${LLM_STREAM_QUEUE_SIZE:-32}
@@ -145,6 +192,10 @@ services:
         target: /models/sentence_embeddings
         read_only: true
     expose: ["5004"]
+    runtime: nvidia
+    devices:
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
     depends_on:
       ollama:
         condition: service_healthy
@@ -163,14 +214,27 @@ services:
     environment:
       <<: *observability-env
       TTS_HOST: 0.0.0.0
-      TTS_MODEL_PATH: /models/tts.pth
-      TTS_CONFIG_PATH: /app/TTS/config.json
-      NUMBA_CACHE_DIR: /tmp/numba-cache
-      MPLCONFIGDIR: /tmp/matplotlib
+      TTS_DEVICE: cpu
+      TTS_CPU_THREADS: ${TTS_CPU_THREADS:-4}
+      TTS_DIACRITIZATION: ${TTS_DIACRITIZATION:-lexicon}
+      TTS_PRONUNCIATION_LEXICON: /app/pronunciation/lexicon.json
+      TTS_MAX_NORMALIZED_TEXT_LENGTH: ${TTS_MAX_NORMALIZED_TEXT_LENGTH:-12000}
+      TTS_MODEL_PATH: /models/mana/fa_IR-mana-medium.onnx
+      TTS_CONFIG_PATH: /models/mana/fa_IR-mana-medium.onnx.json
+      TTS_MODEL_REVISION: ad9dd8518bedf517bd7cbc9f63b8e5c844bf5bc0
+      CUDA_VISIBLE_DEVICES: ""
+      OMP_NUM_THREADS: ${TTS_CPU_THREADS:-4}
+      MKL_NUM_THREADS: ${TTS_CPU_THREADS:-4}
+      XDG_RUNTIME_DIR: /tmp/xdg-runtime
+    command: ["sh", "-c", "mkdir -p /tmp/xdg-runtime && chmod 700 /tmp/xdg-runtime && exec python TTS/tts_server.py"]
     volumes:
       - type: bind
-        source: ${TTS_MODEL_PATH_HOST:-./TTS/best_model_91323.pth}
-        target: /models/tts.pth
+        source: ${TTS_MODEL_DIR_HOST:-./TTS/models/mana}
+        target: /models/mana
+        read_only: true
+      - type: bind
+        source: ${TTS_PRONUNCIATION_DIR_HOST:-./TTS/pronunciation}
+        target: /app/pronunciation
         read_only: true
     expose: ["5002"]
     healthcheck:
@@ -178,7 +242,7 @@ services:
       interval: 20s
       timeout: 5s
       retries: 20
-      start_period: 180s
+      start_period: 60s
     restart: unless-stopped
 
   vc:
@@ -189,30 +253,42 @@ services:
     environment:
       <<: *observability-env
       VC_HOST: 0.0.0.0
-      VC_HPFILE: /app/VC/configs/freevc.json
-      VC_PTFILE: /models/freevc.pth
-      VC_WAVLM_PATH: /models/WavLM-Large.pt
-      VC_SPK_CKPT: /models/speaker-encoder.pt
+      VC_DEVICE: cuda:0
+      VC_PRECISION: fp32
+      VC_CONFIG_PATH: /models/openvoice-v2/converter/config.json
+      VC_CHECKPOINT_PATH: /models/openvoice-v2/converter/checkpoint.pth
+      VC_CHECKPOINT_REVISION: ea66dc9353e660b1dbbe0bebebd4c2d8b105483c
+      VC_OPENVOICE_COMMIT: 74a1d147b17a8c3092dd5430504bd83ef6c7eb23
       VC_SAMPLES_DIR: /app/media/voice_samples
+      TTS_SERVER_URL: http://tts:5002
+      VC_MAX_CONCURRENT_REQUESTS: ${VC_MAX_CONCURRENT_REQUESTS:-1}
+      VC_QUEUE_MAX_SIZE: ${VC_QUEUE_MAX_SIZE:-4}
+      VC_QUEUE_TIMEOUT_SECONDS: ${VC_QUEUE_TIMEOUT_SECONDS:-30}
+      VC_TARGET_CACHE_MAX_ENTRIES: ${VC_TARGET_CACHE_MAX_ENTRIES:-32}
+      VC_TARGET_CACHE_TTL_SECONDS: ${VC_TARGET_CACHE_TTL_SECONDS:-1800}
+      # Measured on the production P40: 253 MiB model peak + 512 MiB margin.
+      VC_MIN_FREE_VRAM_MB: ${VC_MIN_FREE_VRAM_MB:-765}
+      VC_VRAM_SAFETY_MARGIN_MB: ${VC_VRAM_SAFETY_MARGIN_MB:-512}
+      VC_MODEL_RETRY_COOLDOWN_SECONDS: ${VC_MODEL_RETRY_COOLDOWN_SECONDS:-30}
+      VC_MIN_VOICED_SECONDS: ${VC_MIN_VOICED_SECONDS:-0.8}
       NUMBA_CACHE_DIR: /tmp/numba-cache
-      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_VISIBLE_DEVICES: ${VC_GPU_DEVICE:-0}
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
       - media_data:/app/media
       - type: bind
-        source: ${VC_MODEL_PATH_HOST:-./VC/freevc.pth}
-        target: /models/freevc.pth
-        read_only: true
-      - type: bind
-        source: ${VC_WAVLM_PATH_HOST:-./VC/wavlm/WavLM-Large.pt}
-        target: /models/WavLM-Large.pt
-        read_only: true
-      - type: bind
-        source: ${VC_SPEAKER_ENCODER_PATH_HOST:-./VC/speaker_encoder/ckpt/pretrained_bak_5805000.pt}
-        target: /models/speaker-encoder.pt
+        source: ${VC_CHECKPOINT_DIR_HOST:-./VC/checkpoints/openvoice-v2}
+        target: /models/openvoice-v2
         read_only: true
     expose: ["5003"]
     runtime: nvidia
+    # Snap Docker's NVIDIA runtime may omit UVM devices even with the runtime.
+    devices:
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+    depends_on:
+      tts:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5003/health/ready', timeout=2).read()"]
       interval: 20s
@@ -235,7 +311,7 @@ services:
       LLM_SERVER_URL: http://llm:5004
       TTS_SERVER_URL: http://tts:5002
       VC_SERVER_URL: http://vc:5003
-      VC_FAILURE_FALLBACK: ${VC_FAILURE_FALLBACK:-true}
+      VC_FAILURE_FALLBACK: ${VC_FAILURE_FALLBACK:-false}
       SPEECH_THRESHOLD_DBFS: ${SPEECH_THRESHOLD_DBFS:-38}
       SPEECH_END_SILENCE_MS: ${SPEECH_END_SILENCE_MS:-900}
       SENTENCE_QUEUE_SIZE: ${SENTENCE_QUEUE_SIZE:-2}
@@ -326,6 +402,7 @@ services:
     volumes:
       - ./deploy/nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
       - ${TLS_CERTS_DIR:-./certs}:/certs:ro
+      - media_data:/app/media:ro
     ports:
       - "80:80"
       - "443:443"
@@ -334,9 +411,22 @@ services:
       - livekit
     restart: unless-stopped
 
+  # For deployments whose TLS proxy is Nginx on the host rather than in Compose.
+  media:
+    image: nginx:1.30.4-alpine
+    profiles: ["host-nginx"]
+    volumes:
+      - ./deploy/nginx/media.conf:/etc/nginx/conf.d/default.conf:ro
+      - media_data:/app/media:ro
+    ports:
+      - "127.0.0.1:${MEDIA_HTTP_PORT:-8082}:80"
+    restart: unless-stopped
+
   celery-worker:
     profiles: ["training"]
-    build: .
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.training
     command: ["celery", "-A", "MetaRangNPC", "worker", "--loglevel=info", "--pool=solo"]
     environment:
       DJANGO_SETTINGS_MODULE: MetaRangNPC.settings

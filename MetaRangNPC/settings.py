@@ -107,10 +107,38 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 MEDIA_URL = "/media/"
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", BASE_DIR / "media"))
 DATA_ROOT = Path(os.getenv("DATA_ROOT", BASE_DIR / "data"))
+VECTOR_STORE_MAX_FILES = int(os.getenv("VECTOR_STORE_MAX_FILES", "10"))
+VECTOR_STORE_MAX_RSS_LINKS = int(os.getenv("VECTOR_STORE_MAX_RSS_LINKS", "10"))
+VECTOR_STORE_MAX_UPLOAD_BYTES = int(
+    os.getenv("VECTOR_STORE_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024))
+)
+VOICE_SAMPLE_MAX_UPLOAD_BYTES = int(
+    os.getenv("VOICE_SAMPLE_MAX_UPLOAD_BYTES", str(25 * 1024 * 1024))
+)
+VOICE_SAMPLE_MIN_DURATION_SECONDS = float(os.getenv("VOICE_SAMPLE_MIN_DURATION_SECONDS", "1"))
+VOICE_SAMPLE_MAX_DURATION_SECONDS = float(os.getenv("VOICE_SAMPLE_MAX_DURATION_SECONDS", "60"))
+VOICE_SAMPLE_MIN_VOICED_SECONDS = float(os.getenv("VOICE_SAMPLE_MIN_VOICED_SECONDS", "0.8"))
+VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS = float(
+    os.getenv("VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS", "30")
+)
+SPEECH_JOB_RETENTION_SECONDS = int(os.getenv("SPEECH_JOB_RETENTION_SECONDS", "3600"))
+SPEECH_TEXT_MAX_LENGTH = int(os.getenv("SPEECH_TEXT_MAX_LENGTH", "2000"))
+VC_SAMPLE_VALIDATION_TIMEOUT_SECONDS = float(
+    os.getenv("VC_SAMPLE_VALIDATION_TIMEOUT_SECONDS", "3")
+)
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 TTS_SERVER_URL = os.getenv("TTS_SERVER_URL", "http://127.0.0.1:5002")
 VC_SERVER_URL = os.getenv("VC_SERVER_URL", "http://127.0.0.1:5003")
+STT_SERVER_URL = os.getenv("STT_SERVER_URL", "http://127.0.0.1:5001")
+LLM_SERVER_URL = os.getenv("LLM_SERVER_URL", "http://127.0.0.1:5004")
+STT_SERVICE_TIMEOUT_SECONDS = float(os.getenv("STT_TIMEOUT_SECONDS", "120"))
+LLM_SERVICE_TIMEOUT_SECONDS = float(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
+TTS_SERVICE_TIMEOUT_SECONDS = float(os.getenv("TTS_TIMEOUT_SECONDS", "120"))
+VC_SERVICE_TIMEOUT_SECONDS = float(os.getenv("VC_TIMEOUT_SECONDS", "120"))
+VC_FAILURE_FALLBACK = env_bool("VC_FAILURE_FALLBACK", False)
+LLM_OPERATION_TIMEOUT_SECONDS = float(os.getenv("LLM_OPERATION_TIMEOUT_SECONDS", "600"))
+STT_MODEL_NAME = os.getenv("STT_MODEL_NAME", os.getenv("WHISPER_MODEL", "large"))
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://127.0.0.1:6379/0")
 REDIS_SOCKET_TIMEOUT_SECONDS = float(os.getenv("REDIS_SOCKET_TIMEOUT_SECONDS", "5"))
@@ -157,9 +185,10 @@ SPECTACULAR_SETTINGS = {
     "TITLE": "MetaRang Realtime Avatar API",
     "DESCRIPTION": (
         "Creates short-lived LiveKit sessions for the STT → RAG/LLM → TTS → optional voice "
-        "conversion pipeline. Audio travels over WebRTC; this API is the control plane only."
+        "conversion pipeline. Realtime avatar audio travels over WebRTC. The Speech generation "
+        "endpoints additionally expose short-lived REST WAV artifacts for integration testing."
     ),
-    "VERSION": "1.0.0",
+    "VERSION": "1.1.0",
     "SERVE_INCLUDE_SCHEMA": False,
 }
 

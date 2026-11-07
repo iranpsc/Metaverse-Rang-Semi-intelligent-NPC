@@ -24,9 +24,10 @@ async def run(
     timeout: float,
     livekit_url_override: str | None = None,
     voice_sample_id: int | None = None,
+    vector_store: str = "main_store",
 ) -> None:
     async with httpx.AsyncClient(timeout=15) as http:
-        session_request = {"user_id": "smoke-client", "vector_store": "main_store"}
+        session_request = {"user_id": "smoke-client", "vector_store": vector_store}
         if voice_sample_id is not None:
             session_request.update(
                 {"enable_voice_conversion": True, "voice_sample_id": voice_sample_id}
@@ -159,6 +160,11 @@ def main() -> None:
         type=int,
         help="Enable voice conversion using this existing voice-sample ID.",
     )
+    parser.add_argument(
+        "--vector-store",
+        default="main_store",
+        help="Vector-store name returned by the vector-store API.",
+    )
     args = parser.parse_args()
     if not args.wav_file.is_file():
         parser.error(f"WAV file does not exist: {args.wav_file}")
@@ -169,6 +175,7 @@ def main() -> None:
             args.timeout,
             args.livekit_url,
             args.voice_sample_id,
+            args.vector_store,
         )
     )
 
