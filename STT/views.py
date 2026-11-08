@@ -6,13 +6,13 @@ from .tasks import run_training_sequence
 from .forms import WhisperTrainingForm
 import os
 import traceback
+import uuid
 from pathlib import Path
 from django.conf import settings
 from django.shortcuts import render, redirect
 from django.core.files.storage import FileSystemStorage
 from django.http import JsonResponse, HttpResponse
 from django.views.decorators.http import require_http_methods
-import whisper
 from .models import AudioRecording, FineTuningJob
 from pydub import AudioSegment
 from django.views import View
@@ -20,13 +20,13 @@ import pandas as pd
 import zipfile
 import io
 from datetime import datetime
+from pipeline_core.service_client import (
+    InternalServiceError,
+    stream_rag_chat,
+    transcribe_pcm,
+)
 
-# Import LLM service
-try:
-    from LLM.rag_service import RAGService
-    LLM_AVAILABLE = True
-except ImportError:
-    LLM_AVAILABLE = False
+LLM_AVAILABLE = True
 
 
 def home(request):
@@ -75,50 +75,6 @@ def home(request):
     return render(request, 'static/home.html', context)
 
 
-# Simple in-memory cache of loaded Whisper models by key
-WHISPER_MODELS = {}
-
-
-def _resolve_model_key(model_choice):
-    """Normalize model choice to a cache key and loading arguments.
-
-    Accepts either standard Whisper sizes (e.g., "tiny", "base", ...),
-    a HuggingFace repo id (e.g., "openai/whisper-small"), or a local .pt path.
-    Returns a tuple (cache_key, load_arg, device).
-    """
-    # Auto-detect device: use CUDA if available, otherwise CPU
-    import torch
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    if device == 'cuda':
-        print(f"INFO: Using GPU (CUDA) for Whisper model")
-    else:
-        print(f"INFO: Using CPU for Whisper model (CUDA not available)")
-    if not model_choice:
-        # Default to bundled Tiny model if present; otherwise fallback to standard tiny
-        bundled_path = os.path.join(
-            os.path.dirname(__file__), "model", "Turbo.pt")
-        if os.path.exists(bundled_path):
-            return (bundled_path, bundled_path, device)
-        return ("turbo", "turbo", device)
-
-    # If it's an existing local file, load from path
-    if os.path.exists(model_choice):
-        return (model_choice, model_choice, device)
-
-    # Otherwise treat it as a model name/repo id
-    return (model_choice, model_choice, device)
-
-
-def get_whisper_model(model_choice):
-    """Load or retrieve from cache the requested Whisper model."""
-    cache_key, load_arg, device = _resolve_model_key(model_choice)
-    if cache_key in WHISPER_MODELS:
-        return WHISPER_MODELS[cache_key]
-    model = whisper.load_model(load_arg, device=device)
-    WHISPER_MODELS[cache_key] = model
-    return model
-
-
 def get_user_id_for_llm(request):
     """
     Get user_id for LLM service from authenticated user, session, or request data.
@@ -137,17 +93,6 @@ def get_user_id_for_llm(request):
         request.session['user_id'] = str(uuid.uuid4())
     
     return str(request.session['user_id'])
-
-
-def get_user_memory_path_for_llm(user_id):
-    """
-    Get user-specific memory path for LLM.
-    """
-    BASE_DIR = Path(__file__).resolve().parent.parent.parent
-    MEMORY_BASE_PATH = os.path.join(BASE_DIR, "data/memories")
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_memory_dir, exist_ok=True)
-    return user_memory_dir
 
 
 def record_audio(request):
@@ -171,25 +116,24 @@ def record_audio(request):
 
             # 2. Process the audio file
             audio = AudioSegment.from_file(audio_path)
-            audio = audio.set_frame_rate(16000).set_channels(1)
+            audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
 
-            # Create optimized temporary file
+            # Keep an optimized WAV for the existing debug/inspection workflow,
+            # but send raw PCM to the single shared STT microservice.
             temp_path = os.path.join(settings.MEDIA_ROOT, 'temp_optimized.wav')
-            audio.export(temp_path, format="wav", bitrate="16k")
+            audio.export(temp_path, format="wav")
 
-            # 3. Transcribe with selected model (fallback handled inside helper)
-            selected_model = request.POST.get('model')
-            model = get_whisper_model(selected_model)
-            result = model.transcribe(
-                temp_path,  # Use file path, not AudioSegment object
-                fp16=False,
-                temperature=0.0,
-                best_of=1,
-                beam_size=3,
-                patience=1.0,
-                no_speech_threshold=0.6
+            # 3. Transcribe through services/stt_server.py. Django never imports
+            # or caches Whisper, so multiple gunicorn workers cannot duplicate it.
+            turn_id = uuid.uuid4().hex
+            result = transcribe_pcm(
+                settings.STT_SERVER_URL,
+                audio.raw_data,
+                session_id=str(request.session.session_key or get_user_id_for_llm(request)),
+                turn_id=turn_id,
+                timeout_seconds=settings.STT_SERVICE_TIMEOUT_SECONDS,
             )
-            text = result["text"]
+            text = str(result.get("text", "")).strip()
 
             # 4. Save to database
             recording = AudioRecording(
@@ -207,20 +151,43 @@ def record_audio(request):
             if LLM_AVAILABLE and text.strip():
                 try:
                     user_id = get_user_id_for_llm(request)
-                    BASE_DIR = Path(__file__).resolve().parent.parent.parent
-                    VECTOR_STORE_PATH = os.path.join(BASE_DIR, "data/vectorstores/main_store")
-                    memory_path = get_user_memory_path_for_llm(user_id)
-                    
-                    rag_service = RAGService()
-                    # Consume the generator and join all chunks into a single string
-                    llm_response_generator = rag_service.get_answer_for_user(
-                        user_id=user_id,
-                        question=text.strip(),
-                        vector_store_path=VECTOR_STORE_PATH,
-                        memory_path=memory_path
+                    vector_store_base = Path(settings.DATA_ROOT) / "vectorstores"
+                    user_vector_store = vector_store_base / f"user_{user_id}" / "rss_store"
+                    main_vector_store = vector_store_base / "main_store"
+                    vector_store_path = (
+                        user_vector_store
+                        if (user_vector_store / "index.faiss").exists()
+                        else main_vector_store
                     )
-                    # Collect all chunks from the generator into a single string
-                    llm_response = ''.join(llm_response_generator)
+                    if not (vector_store_path / "index.faiss").exists():
+                        vector_store_path = next(
+                            (
+                                index.parent
+                                for index in sorted(vector_store_base.rglob("index.faiss"))
+                            ),
+                            vector_store_path,
+                        )
+                    vector_root = vector_store_base.resolve()
+                    vector_store_name = vector_store_path.resolve().relative_to(vector_root).as_posix()
+                    chunks = []
+                    for event in stream_rag_chat(
+                        settings.LLM_SERVER_URL,
+                        {
+                            "question": text,
+                            "user_id": user_id,
+                            "vector_store": vector_store_name,
+                        },
+                        session_id=str(request.session.session_key or user_id),
+                        turn_id=turn_id,
+                        timeout_seconds=settings.LLM_SERVICE_TIMEOUT_SECONDS,
+                    ):
+                        if event.get("type") == "token":
+                            chunks.append(str(event.get("text", "")))
+                        elif event.get("type") == "error":
+                            raise InternalServiceError(
+                                "llm", str(event.get("code", "LLM generation failed")), status_code=502
+                            )
+                    llm_response = ''.join(chunks)
                 except Exception as e:
                     print(f"Error processing with LLM: {e}")
                     traceback.print_exc()
@@ -236,6 +203,17 @@ def record_audio(request):
                 response_data['llm_response'] = llm_response
 
             return JsonResponse(response_data)
+
+        except InternalServiceError as e:
+            if temp_path and os.path.exists(temp_path):
+                os.remove(temp_path)
+            if filename:
+                fs.delete(filename)
+            return JsonResponse({
+                'status': 'error',
+                'message': str(e),
+                'service': e.service,
+            }, status=e.status_code if 400 <= e.status_code < 600 else 503)
 
         except Exception as e:
             error_trace = traceback.format_exc()
@@ -259,8 +237,8 @@ def record_audio(request):
                 'message': str(e)
             }, status=500)
 
-    # GET: show recorder; carry through selected model from query param if present
-    selected_model = request.GET.get('model')
+    # GET: the model is fixed by the shared STT service configuration.
+    selected_model = settings.STT_MODEL_NAME
     # Get user_id for the template
     user_id = get_user_id_for_llm(request)
     
@@ -304,6 +282,7 @@ def record_audio(request):
         'trained_models': trained_models,
         'available_models': available_models,
         'standard_models': standard_models,
+        'stt_service_url': settings.STT_SERVER_URL,
     }
     return render(request, 'static/record.html', context)
 

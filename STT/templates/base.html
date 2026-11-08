@@ -355,13 +355,20 @@
     <!-- Base JavaScript -->
     <script>
         // Auto-dismiss alerts after 5 seconds
-        $(document).ready(function() {
+        document.addEventListener('DOMContentLoaded', function() {
             setTimeout(function() {
-                $('.alert').alert('close');
+                if (!window.bootstrap?.Alert) return;
+                document.querySelectorAll('.alert').forEach(function(alert) {
+                    bootstrap.Alert.getOrCreateInstance(alert).close();
+                });
             }, 5000);
             
             // Enable tooltips
-            $('[data-bs-toggle="tooltip"]').tooltip();
+            if (window.bootstrap?.Tooltip) {
+                document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function(element) {
+                    bootstrap.Tooltip.getOrCreateInstance(element);
+                });
+            }
         });
     </script>
     

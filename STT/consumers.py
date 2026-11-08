@@ -1,9 +1,6 @@
 import json
-import asyncio
-import whisper
-import os
-import tempfile
-import io
+import uuid
+import httpx
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from pydub import AudioSegment
@@ -15,7 +12,8 @@ from django.conf import settings
 class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.whisper_model = None
+        self.stt_ready = False
+        self.http = None
         self.audio_buffer = b''
         self.sample_rate = 16000
         self.channels = 1
@@ -28,8 +26,8 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
         """Handle WebSocket connection"""
         await self.accept()
 
-        # Load Whisper model asynchronously
-        await self.load_whisper_model()
+        # Check the one shared STT microservice; never load Whisper in Django.
+        await self.connect_stt_service()
 
         # Send connection confirmation
         await self.send(text_data=json.dumps({
@@ -43,46 +41,27 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
         }))
 
     async def disconnect(self, close_code):
-        """Handle WebSocket disconnection"""
-        # Clean up any temporary files
-        if hasattr(self, 'temp_files'):
-            for temp_file in self.temp_files:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
+        if self.http is not None:
+            await self.http.aclose()
 
-    async def load_whisper_model(self):
-        """Load Whisper model asynchronously"""
+    async def connect_stt_service(self):
+        """Create a bounded HTTP client and verify the shared STT service."""
         try:
-            # Auto-detect device: use CUDA if available, otherwise CPU
-            import torch
-            device = 'cuda' if torch.cuda.is_available() else 'cpu'
-            if device == 'cuda':
-                print(f"INFO: WebSocket using GPU (CUDA) for Whisper model")
-            else:
-                print(f"INFO: WebSocket using CPU for Whisper model (CUDA not available)")
-
-            loop = asyncio.get_running_loop()
-            model_path = os.path.join(
-                os.path.dirname(__file__), "model", "Tiny.pt")
-            if os.path.exists(model_path):
-                # Run model loading in thread pool to avoid blocking
-                self.whisper_model = await loop.run_in_executor(
-                    None, whisper.load_model, model_path, device
-                )
-            else:
-                # Fallback to base model
-                self.whisper_model = await loop.run_in_executor(
-                    None, whisper.load_model, 'base', device
-                )
-
+            self.http = httpx.AsyncClient(
+                timeout=httpx.Timeout(settings.STT_SERVICE_TIMEOUT_SECONDS, connect=3.0)
+            )
+            response = await self.http.get(f"{settings.STT_SERVER_URL}/health/ready")
+            response.raise_for_status()
+            self.stt_ready = True
             await self.send(text_data=json.dumps({
                 'type': 'model_loaded',
-                'message': 'Whisper model loaded successfully'
+                'message': f'Shared Whisper {settings.STT_MODEL_NAME} service is ready'
             }))
         except Exception as e:
+            self.stt_ready = False
             await self.send(text_data=json.dumps({
                 'type': 'error',
-                'message': f'Failed to load Whisper model: {str(e)}'
+                'message': f'STT service is unavailable: {str(e)}'
             }))
 
     async def receive(self, text_data=None, bytes_data=None):
@@ -136,7 +115,7 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
             await self.send(text_data=json.dumps({
                 'type': 'status',
                 'buffer_size': len(self.audio_buffer),
-                'model_loaded': self.whisper_model is not None
+                'model_loaded': self.stt_ready
             }))
 
     async def handle_audio_data(self, audio_data):
@@ -168,7 +147,7 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
 
     async def process_audio_chunk(self, chunk_data):
         """Process a chunk of audio data"""
-        if not self.whisper_model or not chunk_data:
+        if not self.stt_ready or not chunk_data:
             return
         # Ensure chunk size is valid
         if len(chunk_data) % 2 != 0:  # Must be multiple of 2 for 16-bit audio
@@ -220,7 +199,7 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
 
     async def process_complete_audio(self):
         """Process the complete audio buffer"""
-        if not self.whisper_model or not self.audio_buffer:
+        if not self.stt_ready or not self.audio_buffer:
             return
 
         try:
@@ -307,37 +286,25 @@ class AudioTranscriptionConsumer(AsyncWebsocketConsumer):
             return [audio_segment]
 
     async def transcribe_audio(self, audio_segment):
-        """Transcribe audio segment using Whisper"""
-        if not self.whisper_model:
+        """Transcribe through the shared STT HTTP service."""
+        if not self.stt_ready or self.http is None:
             return ""
 
         try:
-            # Export audio to temporary file
-            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
-                audio_segment.export(temp_file.name, format="wav")
-                temp_file_path = temp_file.name
-
-            try:
-                # Run transcription in thread pool with correct parameters
-                loop = asyncio.get_event_loop()
-                result = await loop.run_in_executor(
-                    None,
-                    lambda: self.whisper_model.transcribe(
-                        temp_file_path,
-                        fp16=False,
-                        temperature=0.0,
-                        best_of=1,
-                        beam_size=3,
-                        patience=1.0,
-                        no_speech_threshold=0.6
-                    )
-                )
-
-                return result["text"]
-            finally:
-                # Clean up temporary file
-                if os.path.exists(temp_file_path):
-                    os.remove(temp_file_path)
+            normalized = audio_segment.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+            response = await self.http.post(
+                f"{settings.STT_SERVER_URL}/v1/transcriptions",
+                content=normalized.raw_data,
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "X-Sample-Rate": "16000",
+                    "X-Channels": "1",
+                    "X-Session-Id": self.channel_name,
+                    "X-Turn-Id": uuid.uuid4().hex,
+                },
+            )
+            response.raise_for_status()
+            return str(response.json().get("text", ""))
 
         except Exception as e:
             print(f"Transcription error: {e}")

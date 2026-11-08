@@ -16,5 +16,9 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaises(ConfigurationError):
                 AgentSettings.from_env()
 
+    def test_voice_conversion_fallback_defaults_to_disabled(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(AgentSettings.from_env().vc_failure_fallback)
+
     def test_identifier_is_sanitized_and_bounded(self):
         self.assertEqual(safe_identifier("../../user name", fallback="anon", max_length=12), "user-name")

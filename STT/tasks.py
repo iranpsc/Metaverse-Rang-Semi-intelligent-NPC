@@ -1,7 +1,6 @@
 # app/tasks.py
 from celery import shared_task
 from celery.utils.log import get_task_logger
-from .utils import training_sequence  # Import your original function
 
 logger = get_task_logger(__name__)
 
@@ -12,6 +11,10 @@ def run_training_sequence(self, **kwargs):
     Celery task wrapper for the Whisper fine-tuning sequence
     """
     try:
+        # Training dependencies intentionally live only in the optional
+        # training image. Import them when the task runs, never in Django web.
+        from .utils import training_sequence
+
         logger.info(f"Starting Whisper training with params: {kwargs}")
 
         # Add task_id to output_dir for unique logging
