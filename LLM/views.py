@@ -1,31 +1,35 @@
 # views.py
 import json
 import os
-from dataclasses import asdict
+import uuid
 from pathlib import Path
 
-import requests
 from django.conf import settings
 from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
+from django.utils.text import get_valid_filename
 from django.views.decorators.csrf import csrf_exempt
 
 from .models import VoiceSample
-from .rag_service import RAGService
-from .rss_ingestor import RSSIngestor, RSS_SCHEMA
+from .rss_ingestor import RSS_SCHEMA
+from AgentAPI.voice_samples import VoiceSampleProcessingError, normalize_voice_sample
+from pipeline_core.config import safe_identifier
+from pipeline_core.service_client import (
+    InternalServiceError,
+    convert_voice_sample,
+    run_llm_operation,
+    synthesize_speech,
+    stream_rag_chat,
+)
 
 
 # تنظیم مسیرهای وکتوراستور و مموری
 DATA_BASE_PATH = str(settings.DATA_ROOT)
 VECTOR_STORE_PATH = os.path.join(DATA_BASE_PATH, "vectorstores/main_store")
 VECTOR_STORE_BASE_PATH = os.path.join(DATA_BASE_PATH, "vectorstores")
-RSS_DATASET_BASE_PATH = os.path.join(DATA_BASE_PATH, "rss_datasets")
-MEMORY_BASE_PATH = os.path.join(DATA_BASE_PATH, "memories")
 
 os.makedirs(VECTOR_STORE_PATH, exist_ok=True)
 os.makedirs(VECTOR_STORE_BASE_PATH, exist_ok=True)
-os.makedirs(RSS_DATASET_BASE_PATH, exist_ok=True)
-os.makedirs(MEMORY_BASE_PATH, exist_ok=True)
 
 
 def get_user_id(request):
@@ -49,15 +53,6 @@ def get_user_id(request):
     return str(request.session['user_id'])
 
 
-def get_user_memory_path(user_id):
-    """
-    Get user-specific memory path.
-    """
-    user_memory_dir = os.path.join(MEMORY_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_memory_dir, exist_ok=True)
-    return user_memory_dir
-
-
 def get_user_vector_store_path(user_id: str) -> str:
     user_store_dir = os.path.join(VECTOR_STORE_BASE_PATH, f"user_{user_id}", "rss_store")
     os.makedirs(user_store_dir, exist_ok=True)
@@ -69,7 +64,28 @@ def resolve_vector_store_path(user_id: str) -> str:
     index_file = os.path.join(user_store_dir, "index.faiss")
     if os.path.exists(index_file):
         return user_store_dir
+    main_index = os.path.join(VECTOR_STORE_PATH, "index.faiss")
+    if os.path.exists(main_index):
+        return VECTOR_STORE_PATH
+    for discovered_index in sorted(Path(VECTOR_STORE_BASE_PATH).rglob("index.faiss")):
+        return str(discovered_index.parent)
     return VECTOR_STORE_PATH
+
+
+def _vector_store_service_name(path: str) -> str:
+    root = Path(VECTOR_STORE_BASE_PATH).resolve()
+    try:
+        return Path(path).resolve().relative_to(root).as_posix()
+    except ValueError as exc:
+        raise ValueError("Vector store must be inside the shared vector-store directory") from exc
+
+
+def _service_error_response(exc: InternalServiceError) -> JsonResponse:
+    status_code = exc.status_code if 400 <= exc.status_code < 600 else 503
+    return JsonResponse(
+        {"status": "error", "error": str(exc), "service": exc.service},
+        status=status_code,
+    )
 
 
 def list_available_vector_stores():
@@ -170,8 +186,12 @@ def rag_chat_api(request):
     if not question:
         return JsonResponse({"error": "Message is empty"}, status=400)
 
-    memory_path = get_user_memory_path(user_id)
-    rag_service = RAGService()
+    try:
+        vector_store_name = _vector_store_service_name(vector_store_path)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+    session_id = str(request.session.session_key or user_id)
+    turn_id = uuid.uuid4().hex
 
     def event_stream():
         """
@@ -186,31 +206,30 @@ def rag_chat_api(request):
         sys.stdout.flush()
         
         try:
-            # Get answer generator from RAG service
-            answer_generator = rag_service.get_answer_for_user(
-                user_id=user_id,
-                question=question,
-                vector_store_path=vector_store_path,
-                memory_path=memory_path
-            )
-            
-            # Stream chunks directly from the generator in real-time
             chunk_count = 0
-            for chunk in answer_generator:
-                # Skip empty chunks
-                if not chunk or not chunk.strip():
+            for event in stream_rag_chat(
+                settings.LLM_SERVER_URL,
+                {
+                    "question": question,
+                    "user_id": user_id,
+                    "vector_store": vector_store_name,
+                },
+                session_id=session_id,
+                turn_id=turn_id,
+                timeout_seconds=settings.LLM_SERVICE_TIMEOUT_SECONDS,
+            ):
+                if event.get("type") == "error":
+                    raise InternalServiceError(
+                        "llm", str(event.get("code", "Generation failed")), status_code=502
+                    )
+                if event.get("type") != "token":
                     continue
-                    
-                chunk_count += 1
-                
-                # Format as SSE message
-                payload = json.dumps({
-                    "type": "token", 
-                    "token": chunk
-                }, ensure_ascii=False)
-                sse_message = f"data: {payload}\n\n"
-                yield sse_message
-                sys.stdout.flush()
+                chunk = str(event.get("text", ""))
+                if chunk:
+                    chunk_count += 1
+                    payload = json.dumps({"type": "token", "token": chunk}, ensure_ascii=False)
+                    yield f"data: {payload}\n\n"
+                    sys.stdout.flush()
             
             # Send completion signal
             done_msg = f"data: {json.dumps({'type': 'done', 'user_id': user_id, 'chunk_count': chunk_count}, ensure_ascii=False)}\n\n"
@@ -253,8 +272,7 @@ def rag_chat_api(request):
 def tts_api(request):
     """
     Synthesize speech for a piece of text (typically one sentence of an LLM
-    response). Proxies to the TTS microservice (TTS/tts_server.py), which runs
-    in its own venv because Coqui TTS conflicts with this environment's deps.
+    response). Proxies to the persistent CPU-only Mana Piper service.
     Returns audio/wav.
     """
     if request.method != "POST":
@@ -270,25 +288,21 @@ def tts_api(request):
         return JsonResponse({"error": "text is empty"}, status=400)
 
     try:
-        tts_response = requests.post(
-            f"{settings.TTS_SERVER_URL}/synthesize",
-            json={"text": text},
-            timeout=(3, 120),
+        result = synthesize_speech(
+            settings.TTS_SERVER_URL,
+            text,
+            synthesis_settings=data.get("settings"),
+            timeout_seconds=settings.TTS_SERVICE_TIMEOUT_SECONDS,
         )
-    except requests.exceptions.RequestException:
+    except InternalServiceError as exc:
         return JsonResponse(
-            {"error": "TTS service unavailable. Start it with TTS/start_tts_server.sh"},
-            status=503,
+            {"error": str(exc), "code": exc.code},
+            status=exc.status_code if 400 <= exc.status_code < 600 else 503,
         )
 
-    if tts_response.status_code != 200:
-        try:
-            detail = tts_response.json().get("error", "synthesis failed")
-        except ValueError:
-            detail = "synthesis failed"
-        return JsonResponse({"error": detail}, status=502)
-
-    return HttpResponse(tts_response.content, content_type="audio/wav")
+    response = HttpResponse(result.audio, content_type="audio/wav")
+    response["X-MetaRang-TTS-Engine"] = str(result.metrics.get("tts_engine", "mana-piper"))
+    return response
 
 
 @csrf_exempt
@@ -323,27 +337,25 @@ def upload_rss_feed(request):
     if not rss_links:
         return JsonResponse({"error": "No valid RSS links provided"}, status=400)
 
-    # Build dataset path for user (single CSV file per user)
-    user_dataset_dir = os.path.join(RSS_DATASET_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_dataset_dir, exist_ok=True)
-    dataset_path = os.path.join(user_dataset_dir, "rss_dataset.csv")
-    
-    # Get vector store path for user
-    vector_store_path = get_user_vector_store_path(user_id)
-    
-    # Use RAGService.process_user_rss to fetch and process RSS feeds
-    rag_service = RAGService()
-    result = rag_service.process_user_rss(
-        user_id=user_id,
-        rss_links=rss_links,
-        dataset_path=dataset_path,
-        vector_store_path=vector_store_path
-    )
+    try:
+        result = run_llm_operation(
+            settings.LLM_SERVER_URL,
+            "rss",
+            {"user_id": user_id, "rss_links": rss_links},
+            timeout_seconds=settings.LLM_OPERATION_TIMEOUT_SECONDS,
+        )
+    except InternalServiceError as exc:
+        return _service_error_response(exc)
+
+    dataset_path = result.get("dataset_path", "")
+    vector_store_path = result.get("vector_store_path", "")
 
     status_code = 200 if result.get("status") in ["success", "warning"] else 500
     
     # Check if vector store was created
-    vector_store_exists = os.path.exists(os.path.join(vector_store_path, "index.faiss"))
+    vector_store_exists = bool(vector_store_path) and os.path.exists(
+        os.path.join(vector_store_path, "index.faiss")
+    )
     
     response = {
         "message": result.get("message", "RSS processing completed"),
@@ -389,23 +401,18 @@ def upload_single_url(request):
     if not (url.startswith("http://") or url.startswith("https://")):
         return JsonResponse({"error": "Invalid URL format. URL must start with http:// or https://"}, status=400)
 
-    # Build dataset path for user (same CSV file as RSS)
-    user_dataset_dir = os.path.join(RSS_DATASET_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_dataset_dir, exist_ok=True)
-    dataset_path = os.path.join(user_dataset_dir, "rss_dataset.csv")
-    
-    # Get vector store path for user
-    vector_store_path = get_user_vector_store_path(user_id)
-    
-    # Use RAGService.process_single_url to fetch and process the URL
-    rag_service = RAGService()
-    result = rag_service.process_single_url(
-        user_id=user_id,
-        url=url,
-        dataset_path=dataset_path,
-        vector_store_path=vector_store_path,
-        title=title
-    )
+    try:
+        result = run_llm_operation(
+            settings.LLM_SERVER_URL,
+            "url",
+            {"user_id": user_id, "url": url, "title": title},
+            timeout_seconds=settings.LLM_OPERATION_TIMEOUT_SECONDS,
+        )
+    except InternalServiceError as exc:
+        return _service_error_response(exc)
+
+    dataset_path = result.get("dataset_path", "")
+    vector_store_path = result.get("vector_store_path", "")
 
     status_code = 200 if result.get("status") == "success" else 500
     
@@ -435,32 +442,36 @@ def upload_files(request):
         return JsonResponse({"error": "Only POST allowed"}, status=405)
 
     user_id = str(request.POST.get("user_id") or get_user_id(request))
+    safe_user_id = safe_identifier(user_id, fallback="anonymous", max_length=128)
 
     files = request.FILES.getlist("files")
     if not files:
         return JsonResponse({"error": "No files uploaded"}, status=400)
 
-    # Build dataset path (same dataset as RSS & URL)
-    user_dataset_dir = os.path.join(RSS_DATASET_BASE_PATH, f"user_{user_id}")
-    os.makedirs(user_dataset_dir, exist_ok=True)
-    dataset_path = os.path.join(user_dataset_dir, "rss_dataset.csv")
-
-    # Vector store path
-    vector_store_path = get_user_vector_store_path(user_id)
-
-    rag_service = RAGService()
-
     try:
-        result = rag_service.process_uploaded_files(
-            user_id=user_id,
-            files=files,
-            dataset_path=dataset_path,
-            vector_store_path=vector_store_path
+        upload_root = Path(settings.DATA_ROOT) / "uploads" / f"user_{safe_user_id}"
+        saved_paths = []
+        for uploaded_file in files:
+            safe_name = get_valid_filename(Path(uploaded_file.name).name) or "document"
+            destination_dir = upload_root / uuid.uuid4().hex
+            destination_dir.mkdir(parents=True, exist_ok=False)
+            destination = destination_dir / safe_name
+            with destination.open("wb") as target:
+                for chunk in uploaded_file.chunks():
+                    target.write(chunk)
+            saved_paths.append(str(destination))
+
+        result = run_llm_operation(
+            settings.LLM_SERVER_URL,
+            "files",
+            {"user_id": safe_user_id, "file_paths": saved_paths},
+            timeout_seconds=settings.LLM_OPERATION_TIMEOUT_SECONDS,
         )
 
         status_code = 200 if result.get("status") == "success" else 500
-
-        vector_store_exists = os.path.exists(
+        dataset_path = result.get("dataset_path", "")
+        vector_store_path = result.get("vector_store_path", "")
+        vector_store_exists = bool(vector_store_path) and os.path.exists(
             os.path.join(vector_store_path, "index.faiss")
         )
 
@@ -468,7 +479,7 @@ def upload_files(request):
             "status": result.get("status"),
             "message": result.get("message", "File processing completed"),
             "new_count": result.get("new_count", 0),
-            "processed_files": result.get("processed_files", []),
+            "processed_files": [Path(path).name for path in saved_paths],
             "dataset_path": dataset_path,
             "vector_store_path": vector_store_path,
             "vector_store_exists": vector_store_exists,
@@ -476,8 +487,9 @@ def upload_files(request):
 
         return JsonResponse(response, status=status_code)
 
+    except InternalServiceError as exc:
+        return _service_error_response(exc)
     except Exception as e:
-        traceback.print_exc()
         return JsonResponse(
             {"status": "error", "message": str(e)},
             status=500
@@ -518,13 +530,19 @@ def vector_store_rebuild_api(request):
     if not os.path.exists(dataset_abs_path):
         return JsonResponse({"error": f"Dataset not found at {dataset_abs_path}"}, status=404)
 
-    os.makedirs(vector_store_abs_path, exist_ok=True)
-    rag_service = RAGService()
-    result = rag_service.build_vector_store(
-        dataset_path=dataset_abs_path,
-        vector_store_path=vector_store_abs_path,
-        user_id=user_id,
-    )
+    try:
+        result = run_llm_operation(
+            settings.LLM_SERVER_URL,
+            "rebuild",
+            {
+                "dataset_path": dataset_abs_path,
+                "vector_store_path": vector_store_abs_path,
+                "user_id": user_id,
+            },
+            timeout_seconds=settings.LLM_OPERATION_TIMEOUT_SECONDS,
+        )
+    except InternalServiceError as exc:
+        return _service_error_response(exc)
 
     status_code = 200 if result.get("status") == "success" else 500
     return JsonResponse(
@@ -554,16 +572,16 @@ def list_vector_stores_api(request):
 
 
 # ---------------------------------------------------------------------------
-# Voice conversion (FreeVC)
+# Voice conversion (OpenVoice V2)
 #
 # Recorded target voices ("voice samples") are stored via the VoiceSample model
-# under media/voice_samples/. The FreeVC microservice (VC/vc_server.py) reads
+# under media/voice_samples/. The OpenVoice microservice (VC/vc_server.py) reads
 # those files by basename and re-voices a source clip (typically the TTS output)
 # in the chosen target voice. These views manage the sample library and proxy
 # conversion requests, mirroring the TTS proxy above.
 # ---------------------------------------------------------------------------
 
-MAX_VOICE_SAMPLE_BYTES = 25 * 1024 * 1024  # 25 MB guard for uploaded recordings
+MAX_VOICE_SAMPLE_BYTES = settings.VOICE_SAMPLE_MAX_UPLOAD_BYTES
 
 
 def _voice_sample_dict(sample):
@@ -578,7 +596,7 @@ def _voice_sample_dict(sample):
 
 def voice_samples_page(request):
     """Render the page for recording and managing target voice samples."""
-    return render(request, "voice_samples.html", {})
+    return render(request, "voice_samples.html", {"max_voice_sample_bytes": MAX_VOICE_SAMPLE_BYTES})
 
 
 @csrf_exempt
@@ -598,7 +616,29 @@ def voice_samples_api(request):
         if audio.size and audio.size > MAX_VOICE_SAMPLE_BYTES:
             return JsonResponse({"error": "recording is too large"}, status=400)
 
-        sample = VoiceSample.objects.create(name=name[:64], audio_file=audio)
+        try:
+            normalized_audio, _ = normalize_voice_sample(
+                audio,
+                min_duration_seconds=settings.VOICE_SAMPLE_MIN_DURATION_SECONDS,
+                max_duration_seconds=settings.VOICE_SAMPLE_MAX_DURATION_SECONDS,
+                min_voiced_seconds=settings.VOICE_SAMPLE_MIN_VOICED_SECONDS,
+                timeout_seconds=settings.VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS,
+            )
+        except VoiceSampleProcessingError as exc:
+            return JsonResponse(
+                {"error": str(exc), "code": "invalid_voice_sample"}, status=400
+            )
+
+        sample = VoiceSample(name=name[:64])
+        try:
+            sample.audio_file.save("sample.wav", normalized_audio, save=False)
+            sample.save()
+        except Exception:
+            if sample.audio_file:
+                sample.audio_file.delete(save=False)
+            return JsonResponse(
+                {"error": "Voice sample could not be saved."}, status=500
+            )
         return JsonResponse({"sample": _voice_sample_dict(sample)}, status=201)
 
     return JsonResponse({"error": "Only GET and POST allowed"}, status=405)
@@ -623,7 +663,7 @@ def voice_sample_delete_api(request, sample_id):
 
 @csrf_exempt
 def vc_convert_api(request):
-    """Convert a source WAV clip to a target voice via the FreeVC microservice.
+    """Convert a source WAV clip to a target voice via the OpenVoice V2 service.
 
     Body: raw WAV bytes of the source (e.g. the TTS output).
     Query: ?sample_id=<id> selecting the target voice sample.
@@ -646,24 +686,29 @@ def vc_convert_api(request):
         return JsonResponse({"error": "empty source audio"}, status=400)
 
     try:
-        vc_response = requests.post(
-            f"{settings.VC_SERVER_URL}/convert",
-            params={"target": sample.filename},
-            data=source_bytes,
-            headers={"Content-Type": "audio/wav"},
-            timeout=(3, 120),
+        result = convert_voice_sample(
+            settings.VC_SERVER_URL,
+            source_bytes,
+            target_filename=sample.filename,
+            timeout_seconds=settings.VC_SERVICE_TIMEOUT_SECONDS,
         )
-    except requests.exceptions.RequestException:
-        return JsonResponse(
-            {"error": "Voice conversion service unavailable. Start it with VC/start_vc_server.sh"},
-            status=503,
+    except InternalServiceError as exc:
+        if settings.VC_FAILURE_FALLBACK:
+            response = HttpResponse(source_bytes, content_type="audio/wav")
+            response["X-MetaRang-VC-Fallback"] = "true"
+            response["X-MetaRang-VC-Error-Code"] = exc.code
+            return response
+        response = JsonResponse(
+            {"error": str(exc), "code": exc.code, "fallback_used": False},
+            status=exc.status_code if 400 <= exc.status_code < 600 else 503,
         )
+        if exc.retry_after:
+            response["Retry-After"] = exc.retry_after
+        return response
 
-    if vc_response.status_code != 200:
-        try:
-            detail = vc_response.json().get("error", "conversion failed")
-        except ValueError:
-            detail = "conversion failed"
-        return JsonResponse({"error": detail}, status=502)
-
-    return HttpResponse(vc_response.content, content_type="audio/wav")
+    response = HttpResponse(result.audio, content_type="audio/wav")
+    response["X-MetaRang-VC-Engine"] = str(
+        result.metrics.get("vc_engine", "openvoice-v2")
+    )
+    response["X-MetaRang-VC-Fallback"] = "false"
+    return response

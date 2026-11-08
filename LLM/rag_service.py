@@ -9,6 +9,7 @@ import trafilatura
 from .config import CONFIG
 from .rag_system import RAGSession, VectorStoreManager, MemoryManager, RSSUpdater
 from .utils import extract_text_from_file
+from .web_extraction import extract_web_content
 import os
 
 logger = logging.getLogger(__name__)
@@ -168,8 +169,9 @@ class RAGService:
             if not downloaded:
                 return {"status": "error", "message": "Could not download the URL. The page might be inaccessible."}
             
-            # Extract text content
-            full_text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+            # Extract text and preserve every table row/column. Many price and
+            # specification pages keep their useful facts exclusively in tables.
+            full_text = extract_web_content(downloaded)
             
             if not full_text or not full_text.strip():
                 return {"status": "error", "message": "Could not extract content from the provided URL. The page might be empty or inaccessible."}

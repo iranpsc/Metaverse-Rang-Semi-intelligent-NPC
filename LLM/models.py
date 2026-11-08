@@ -7,7 +7,7 @@ from django.db import models
 def voice_sample_path(instance, filename):
     """Store recordings under media/voice_samples/ with a unique, safe name.
 
-    The FreeVC microservice reads these files back by basename, so the name
+    The OpenVoice microservice reads these files back by basename, so the name
     must be collision-free and free of path separators.
     """
     ext = os.path.splitext(filename)[1].lower() or ".webm"
