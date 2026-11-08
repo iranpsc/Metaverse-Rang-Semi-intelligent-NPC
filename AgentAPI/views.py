@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import socket
+import time
 import uuid
 from datetime import timedelta
 from pathlib import Path
@@ -13,6 +15,7 @@ from asgiref.sync import async_to_sync
 from django.conf import settings
 from django.db import connection
 from django.utils import timezone
+from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiResponse, extend_schema
 from filelock import FileLock, Timeout as FileLockTimeout
 from livekit import api
@@ -22,12 +25,19 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
-from django.http import HttpResponse
+from django.http import FileResponse, HttpResponse
+from django.urls import reverse
 from django.utils.text import get_valid_filename
 
 from LLM.models import VoiceSample
-from LLM.rag_service import RAGService
 from pipeline_core.config import ConfigurationError, safe_identifier
+from pipeline_core.service_client import run_llm_operation
+from pipeline_core.service_client import (
+    InternalServiceError,
+    convert_voice_reference,
+    convert_voice_sample,
+    synthesize_speech,
+)
 
 from .livekit import create_participant_token, delete_room, provision_room_and_agent
 from .models import AgentSession
@@ -36,6 +46,8 @@ from .serializers import (
     AgentSessionResponseSerializer,
     ErrorSerializer,
     HealthSerializer,
+    SpeechJobCreateSerializer,
+    SpeechJobResponseSerializer,
     VoiceSampleCreateSerializer,
     VoiceSampleDeleteSerializer,
     VoiceSampleListSerializer,
@@ -84,8 +96,10 @@ class VoiceSampleListCreateView(APIView):
         summary="Upload a target voice sample",
         description=(
             "Uploads a target-speaker recording and normalizes it to mono 16 kHz PCM WAV, "
-            "the format consumed by FreeVC. Use the returned `id` as `voice_sample_id` and "
-            "set `enable_voice_conversion` to true when creating an agent session."
+            "the format consumed by OpenVoice V2. Recordings may be 1–60 seconds; 6–15 seconds "
+            "of clean, single-speaker speech is recommended. A VAD check rejects empty or mostly "
+            "silent input. Use the returned `id` as `voice_sample_id` and set "
+            "`enable_voice_conversion` to true when creating an agent session."
         ),
         request=VoiceSampleCreateSerializer,
         responses={
@@ -107,6 +121,7 @@ class VoiceSampleListCreateView(APIView):
                 serializer.validated_data["audio"],
                 min_duration_seconds=settings.VOICE_SAMPLE_MIN_DURATION_SECONDS,
                 max_duration_seconds=settings.VOICE_SAMPLE_MAX_DURATION_SECONDS,
+                min_voiced_seconds=settings.VOICE_SAMPLE_MIN_VOICED_SECONDS,
                 timeout_seconds=settings.VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS,
             )
         except VoiceSampleProcessingError as exc:
@@ -156,6 +171,260 @@ class VoiceSampleDeleteView(APIView):
         sample.audio_file.delete(save=False)
         sample.delete()
         return Response({"id": sample_id, "status": "deleted"})
+
+
+def _speech_jobs_root() -> Path:
+    return Path(settings.MEDIA_ROOT) / "speech_jobs"
+
+
+def _cleanup_expired_speech_jobs() -> None:
+    root = _speech_jobs_root()
+    if not root.is_dir():
+        return
+    cutoff = timezone.now().timestamp() - settings.SPEECH_JOB_RETENTION_SECONDS
+    for candidate in root.iterdir():
+        try:
+            uuid.UUID(candidate.name)
+            if candidate.is_dir() and candidate.stat().st_mtime < cutoff:
+                shutil.rmtree(candidate)
+        except (OSError, ValueError):
+            logger.warning(
+                "Could not inspect or remove an expired speech job",
+                extra={"speech_job": candidate.name},
+            )
+
+
+def _speech_audio_url(request, job_id: uuid.UUID, artifact: str) -> str:
+    path = reverse(
+        "speech-job-audio",
+        kwargs={"job_id": job_id, "artifact": artifact},
+    )
+    return request.build_absolute_uri(path)
+
+
+class SpeechJobCreateView(APIView):
+    """Run Mana synthesis followed by optional-reference OpenVoice conversion."""
+
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser]
+
+    @extend_schema(
+        operation_id="create_speech_job",
+        summary="Synthesize Persian speech and convert it to a target voice",
+        description=(
+            "Runs the combined Mana Piper CPU TTS → OpenVoice V2 GPU voice-conversion flow. "
+            "Choose exactly one target: `sample_id` for a persistent uploaded sample, "
+            "or `reference_audio` for a one-request temporary sample. Temporary reference audio "
+            "is normalized but never stored. Generated audio is retained for the configured "
+            "short-lived job retention period. The deprecated `voice_sample_id` alias remains "
+            "accepted for compatibility. Voice-conversion fallback is disabled by default."
+        ),
+        request=SpeechJobCreateSerializer,
+        responses={
+            201: SpeechJobResponseSerializer,
+            400: ErrorSerializer,
+            404: ErrorSerializer,
+            429: OpenApiResponse(response=ErrorSerializer, description="VC queue is full"),
+            503: OpenApiResponse(
+                response=ErrorSerializer,
+                description="TTS or GPU voice-conversion service is unavailable",
+            ),
+        },
+        tags=["Speech generation"],
+    )
+    def post(self, request):
+        serializer = SpeechJobCreateSerializer(
+            data=request.data,
+            context={
+                "max_bytes": settings.VOICE_SAMPLE_MAX_UPLOAD_BYTES,
+                "max_text_length": settings.SPEECH_TEXT_MAX_LENGTH,
+            },
+        )
+        serializer.is_valid(raise_exception=True)
+        payload = serializer.validated_data
+        job_started = time.perf_counter()
+        _cleanup_expired_speech_jobs()
+
+        sample = None
+        reference_bytes = None
+        if "voice_sample_id" in payload:
+            try:
+                sample = VoiceSample.objects.get(pk=payload["voice_sample_id"])
+            except VoiceSample.DoesNotExist:
+                return Response(
+                    {"error": "Voice sample was not found.", "code": "voice_sample_not_found"},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if not sample.audio_file or not sample.audio_file.storage.exists(
+                sample.audio_file.name
+            ):
+                return Response(
+                    {
+                        "error": "Voice sample audio file was not found.",
+                        "code": "voice_sample_file_missing",
+                    },
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+        else:
+            try:
+                normalized_reference, _ = normalize_voice_sample(
+                    payload["reference_audio"],
+                    min_duration_seconds=settings.VOICE_SAMPLE_MIN_DURATION_SECONDS,
+                    max_duration_seconds=settings.VOICE_SAMPLE_MAX_DURATION_SECONDS,
+                    min_voiced_seconds=settings.VOICE_SAMPLE_MIN_VOICED_SECONDS,
+                    timeout_seconds=settings.VOICE_SAMPLE_PROCESSING_TIMEOUT_SECONDS,
+                )
+                reference_bytes = normalized_reference.read()
+            except VoiceSampleProcessingError as exc:
+                return Response(
+                    {"error": str(exc), "code": "invalid_voice_sample"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+        synthesis_settings = {
+            key: payload[key]
+            for key in ("length_scale", "noise_scale", "noise_w")
+            if key in payload
+        }
+        try:
+            synthesized = synthesize_speech(
+                settings.TTS_SERVER_URL,
+                payload["text"],
+                synthesis_settings=synthesis_settings,
+                timeout_seconds=settings.TTS_SERVICE_TIMEOUT_SECONDS,
+            )
+        except InternalServiceError as exc:
+            return Response(
+                {"error": str(exc), "code": exc.code, "stage": "tts"},
+                status=exc.status_code if 400 <= exc.status_code < 600 else 503,
+            )
+
+        try:
+            if sample is not None:
+                converted = convert_voice_sample(
+                    settings.VC_SERVER_URL,
+                    synthesized.audio,
+                    target_filename=sample.filename,
+                    timeout_seconds=settings.VC_SERVICE_TIMEOUT_SECONDS,
+                )
+            else:
+                converted = convert_voice_reference(
+                    settings.VC_SERVER_URL,
+                    synthesized.audio,
+                    reference_bytes,
+                    tau=payload["tau"],
+                    timeout_seconds=settings.VC_SERVICE_TIMEOUT_SECONDS,
+                )
+        except InternalServiceError as exc:
+            if not settings.VC_FAILURE_FALLBACK:
+                response = Response(
+                    {
+                        "error": str(exc),
+                        "code": exc.code,
+                        "stage": "voice_conversion",
+                        "fallback_used": False,
+                    },
+                    status=exc.status_code if 400 <= exc.status_code < 600 else 503,
+                )
+                if exc.retry_after:
+                    response["Retry-After"] = exc.retry_after
+                return response
+            converted = None
+            logger.warning(
+                "Combined speech API used original TTS audio after VC failure",
+                extra={"event": "vc_fallback", "error_code": exc.code},
+            )
+
+        job_id = uuid.uuid4()
+        job_directory = _speech_jobs_root() / str(job_id)
+        job_directory.mkdir(parents=True, exist_ok=False)
+        (job_directory / "source.wav").write_bytes(synthesized.audio)
+        if converted is not None:
+            (job_directory / "converted.wav").write_bytes(converted.audio)
+
+        fallback_used = converted is None
+        total_time = time.perf_counter() - job_started
+        vc_metrics = {} if fallback_used else converted.metrics
+        audio_duration = float(
+            vc_metrics.get("audio_duration", synthesized.metrics.get("audio_duration", 0.0))
+            or 0.0
+        )
+        metrics = {
+            "normalization_time": synthesized.metrics.get("normalization_time"),
+            "tts_time": synthesized.metrics.get("tts_time"),
+            "tts_rtf": synthesized.metrics.get("tts_rtf"),
+            "cpu_time": synthesized.metrics.get("cpu_time"),
+            "cpu_percent": synthesized.metrics.get("cpu_percent"),
+            "ram_peak_mib": synthesized.metrics.get("ram_peak_mib"),
+            "source_embedding_time": vc_metrics.get("source_embedding_time"),
+            "target_embedding_time": vc_metrics.get("target_embedding_time"),
+            "conversion_time": vc_metrics.get("conversion_time"),
+            "conversion_rtf": vc_metrics.get("conversion_rtf"),
+            "queue_wait_time": vc_metrics.get("queue_wait"),
+            "target_cache_hit": vc_metrics.get("target_cache_hit"),
+            "audio_duration": audio_duration,
+            "total_time": total_time,
+            "end_to_end_rtf": total_time / audio_duration if audio_duration else None,
+        }
+        source_url = _speech_audio_url(request, job_id, "source")
+        response_payload = {
+            "job_id": job_id,
+            "status": "completed_with_fallback" if fallback_used else "completed",
+            "conversion_status": "fallback" if fallback_used else "completed",
+            "fallback_used": fallback_used,
+            "source_audio_url": source_url,
+            "converted_audio_url": (
+                None if fallback_used else _speech_audio_url(request, job_id, "converted")
+            ),
+            "metrics": metrics,
+            "expires_at": timezone.now()
+            + timedelta(seconds=settings.SPEECH_JOB_RETENTION_SECONDS),
+        }
+        logger.info(
+            "Combined speech job completed",
+            extra={
+                "event": "speech_job_complete",
+                "speech_job_id": str(job_id),
+                "fallback_used": fallback_used,
+                "total_time_seconds": round(total_time, 6),
+                "tts_time_seconds": synthesized.metrics.get("tts_time"),
+                "conversion_time_seconds": vc_metrics.get("conversion_time"),
+                "queue_wait_seconds": vc_metrics.get("queue_wait"),
+            },
+        )
+        return Response(
+            SpeechJobResponseSerializer(response_payload).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class SpeechJobAudioView(APIView):
+    authentication_classes: list = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(
+        operation_id="download_speech_job_audio",
+        summary="Download source or converted WAV from a speech job",
+        responses={
+            (200, "audio/wav"): OpenApiTypes.BINARY,
+            404: ErrorSerializer,
+        },
+        tags=["Speech generation"],
+    )
+    def get(self, request, job_id, artifact):
+        if artifact not in {"source", "converted"}:
+            return Response(
+                {"error": "Audio artifact was not found.", "code": "audio_not_found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        audio_path = _speech_jobs_root() / str(job_id) / f"{artifact}.wav"
+        if not audio_path.is_file():
+            return Response(
+                {"error": "Audio artifact was not found or has expired.", "code": "audio_not_found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return FileResponse(audio_path.open("rb"), content_type="audio/wav")
 
 
 def _user_vector_store_paths(user_id: str) -> tuple[Path, Path, Path]:
@@ -224,11 +493,11 @@ class VectorStoreCreateView(APIView):
                                 target.write(chunk)
                         saved_paths.append(str(destination))
 
-                    result = RAGService().process_user_files(
-                        user_id=user_id,
-                        file_paths=saved_paths,
-                        dataset_path=str(dataset_path),
-                        vector_store_path=str(vector_store_path),
+                    result = run_llm_operation(
+                        settings.LLM_SERVER_URL,
+                        "files",
+                        {"user_id": user_id, "file_paths": saved_paths},
+                        timeout_seconds=settings.LLM_OPERATION_TIMEOUT_SECONDS,
                     )
             except FileLockTimeout:
                 return Response(
@@ -319,11 +588,11 @@ class VectorStoreRSSCreateView(APIView):
             lock = FileLock(str(vector_store_path.parent / ".build.lock"), timeout=1)
             try:
                 with lock:
-                    result = RAGService().process_user_rss(
-                        user_id=user_id,
-                        rss_links=rss_links,
-                        dataset_path=str(dataset_path),
-                        vector_store_path=str(vector_store_path),
+                    result = run_llm_operation(
+                        settings.LLM_SERVER_URL,
+                        "rss",
+                        {"user_id": user_id, "rss_links": rss_links},
+                        timeout_seconds=settings.LLM_OPERATION_TIMEOUT_SECONDS,
                     )
             except FileLockTimeout:
                 return Response(

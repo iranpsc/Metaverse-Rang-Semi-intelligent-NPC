@@ -94,6 +94,82 @@ class VoiceSampleDeleteSerializer(serializers.Serializer):
     status = serializers.CharField()
 
 
+class SpeechJobCreateSerializer(serializers.Serializer):
+    text = serializers.CharField(
+        trim_whitespace=True,
+        help_text="Persian text synthesized by the CPU-only Mana Piper service.",
+    )
+    sample_id = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        help_text="ID of a previously uploaded persistent target voice sample.",
+    )
+    voice_sample_id = serializers.IntegerField(
+        required=False,
+        min_value=1,
+        help_text="Deprecated alias for sample_id; retained for backward compatibility.",
+    )
+    reference_audio = serializers.FileField(
+        required=False,
+        help_text=(
+            "Temporary target-voice recording. It is normalized in memory, sent to OpenVoice, "
+            "and never added to the persistent voice-sample library."
+        ),
+    )
+    tau = serializers.FloatField(required=False, default=0.3, min_value=0.0, max_value=1.0)
+    length_scale = serializers.FloatField(required=False, min_value=0.5, max_value=2.0)
+    noise_scale = serializers.FloatField(required=False, min_value=0.0, max_value=2.0)
+    noise_w = serializers.FloatField(required=False, min_value=0.0, max_value=2.0)
+
+    def validate_reference_audio(self, audio):
+        suffix = Path(audio.name).suffix.lower()
+        if suffix not in SUPPORTED_VOICE_SAMPLE_EXTENSIONS:
+            supported = ", ".join(SUPPORTED_VOICE_SAMPLE_EXTENSIONS)
+            raise serializers.ValidationError(f"Unsupported audio type. Supported: {supported}.")
+        if not audio.size:
+            raise serializers.ValidationError("The reference recording is empty.")
+        max_bytes = self.context["max_bytes"]
+        if audio.size > max_bytes:
+            max_megabytes = max_bytes // (1024 * 1024)
+            raise serializers.ValidationError(
+                f"The reference recording exceeds the {max_megabytes} MB limit."
+            )
+        return audio
+
+    def validate_text(self, value: str) -> str:
+        if len(value) > self.context["max_text_length"]:
+            raise serializers.ValidationError(
+                f"Text must not exceed {self.context['max_text_length']} characters."
+            )
+        return value
+
+    def validate(self, attrs):
+        persistent_ids = int("sample_id" in attrs) + int("voice_sample_id" in attrs)
+        if persistent_ids > 1:
+            raise serializers.ValidationError(
+                "Provide sample_id only; voice_sample_id is its backward-compatible alias."
+            )
+        targets = int(persistent_ids == 1) + int("reference_audio" in attrs)
+        if targets != 1:
+            raise serializers.ValidationError(
+                "Provide exactly one of sample_id or reference_audio."
+            )
+        if "sample_id" in attrs:
+            attrs["voice_sample_id"] = attrs.pop("sample_id")
+        return attrs
+
+
+class SpeechJobResponseSerializer(serializers.Serializer):
+    job_id = serializers.UUIDField()
+    status = serializers.ChoiceField(choices=("completed", "completed_with_fallback"))
+    conversion_status = serializers.ChoiceField(choices=("completed", "fallback"))
+    fallback_used = serializers.BooleanField()
+    source_audio_url = serializers.CharField()
+    converted_audio_url = serializers.CharField(allow_null=True)
+    metrics = serializers.DictField()
+    expires_at = serializers.DateTimeField()
+
+
 class VectorStoreCreateSerializer(serializers.Serializer):
     user_id = serializers.RegexField(
         r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",

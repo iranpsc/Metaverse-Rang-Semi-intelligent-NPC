@@ -6,6 +6,8 @@ from .views import (
     LiveHealthView,
     MetricsView,
     ReadyHealthView,
+    SpeechJobAudioView,
+    SpeechJobCreateView,
     VectorStoreCreateView,
     VectorStoreRSSCreateView,
     VectorStoreStatusView,
@@ -26,6 +28,12 @@ urlpatterns = [
         "voice-samples/<int:sample_id>/",
         VoiceSampleDeleteView.as_view(),
         name="voice-sample-delete",
+    ),
+    path("speech/jobs/", SpeechJobCreateView.as_view(), name="speech-job-create"),
+    path(
+        "speech/jobs/<uuid:job_id>/<str:artifact>/",
+        SpeechJobAudioView.as_view(),
+        name="speech-job-audio",
     ),
     path("vector-stores/", VectorStoreCreateView.as_view(), name="vector-store-create"),
     path(
