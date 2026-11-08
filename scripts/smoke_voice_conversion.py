@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Upload a temporary voice sample and exercise the live FreeVC conversion path."""
+"""Upload a temporary sample and exercise the live OpenVoice V2 conversion path."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ def main() -> None:
 
     source_response = requests.post(
         f"{tts_url}/synthesize",
-        json={"text": "This is a temporary voice conversion integration test recording."},
+        json={"text": "این یک نمونه موقت برای آزمون یکپارچه تبدیل صدا است."},
         timeout=120,
     )
     source_response.raise_for_status()
@@ -52,8 +52,10 @@ def main() -> None:
         )
         conversion_response.raise_for_status()
         with wave.open(io.BytesIO(conversion_response.content), "rb") as converted:
-            if converted.getnframes() <= 0 or converted.getframerate() != 16000:
-                raise RuntimeError("FreeVC returned an invalid WAV response")
+            if converted.getnframes() <= 0 or converted.getframerate() != 22050:
+                raise RuntimeError("OpenVoice V2 returned an invalid WAV response")
+        if conversion_response.headers.get("X-MetaRang-VC-Engine") != "openvoice-v2":
+            raise RuntimeError("Unexpected voice-conversion engine")
 
         print(
             f"OK sample_id={sample_id} filename={filename} "

@@ -1,0 +1,19 @@
+{
+  "language": "fa-IR",
+  "purpose": "Functional Persian intelligibility and normalization checks",
+  "quality_acceptance": false,
+  "sentences": [
+    {"id": "short-greeting", "text": "سلام، به سامانه متارنگ خوش آمدید."},
+    {"id": "long-sentence", "text": "سامانه باید جمله‌های کوتاه و بلند فارسی را روشن، پیوسته و بدون صدای اضافه تولید کند."},
+    {"id": "persian-digits", "text": "امروز ۱۲۳ درخواست ثبت شد و ۴۵ پاسخ با موفقیت تولید شد."},
+    {"id": "arabic-digits", "text": "نسخه ١٢ در ساعت ٠٩:٣٠ منتشر می‌شود."},
+    {"id": "decimal-percent", "text": "مقدار اندازه‌گیری‌شده ۱۲٫۵ درصد و ضریب آن ۳.۱۴ است."},
+    {"id": "date-time", "text": "جلسه در تاریخ ۱۴۰۵/۰۸/۱۲ و ساعت ۱۶:۴۵ برگزار می‌شود."},
+    {"id": "currency", "text": "هزینه این سرویس ۲۵۰۰۰ تومان محاسبه شده است."},
+    {"id": "zwnj", "text": "کاربران می‌توانند پاسخ‌های تولیدشده را دوباره بررسی کنند."},
+    {"id": "technical-english", "text": "سرویس API با WebRTC و GPU کار می‌کند و خروجی JSON می‌دهد."},
+    {"id": "email-url", "text": "برای راهنما به docs.example.com بروید یا به support@example.com پیام بدهید."},
+    {"id": "markdown", "text": "**کیفیت صدا** را در بخش [راهنما](https://example.com/help) بررسی کنید."},
+    {"id": "punctuation", "text": "آیا صدا طبیعی است؟ بله؛ اما نتیجه نهایی به آزمون شنیداری نیاز دارد!"}
+  ]
+}
