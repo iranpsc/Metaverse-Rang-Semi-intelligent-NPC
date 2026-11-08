@@ -3,6 +3,7 @@
 .vscode/
 .claude/
 .agents/
+.gpu-recovery/
 
 # Python and Django runtime files
 __pycache__/
@@ -25,6 +26,11 @@ nohup.out
 *.safetensors
 *.wav
 *.webp
+models/speech/
+TTS/models/
+VC/checkpoints/
+artifacts/benchmarks/*.json
+artifacts/benchmarks/*.wav
 
 # Local tooling artifacts
 skills-lock.json

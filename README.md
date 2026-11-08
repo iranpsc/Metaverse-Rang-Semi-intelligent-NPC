@@ -1,6 +1,10 @@
 # MetaRang realtime avatar backend
 
-MetaRang exposes the existing Whisper → RAG/LLM → Coqui TTS → optional FreeVC pipeline as one self-hosted LiveKit participant. Django is the control plane; microphone and response audio never travel through Django REST.
+MetaRang exposes the Whisper → RAG/LLM → Mana Persian Piper TTS → optional OpenVoice V2 pipeline as one self-hosted LiveKit participant. The realtime Unity path carries microphone and response audio over LiveKit/WebRTC; the separate documented speech-job REST endpoint is intended for generation, testing, and downloads.
+
+TTS includes offline Persian number normalization and selective pronunciation/
+diacritic overrides. See [speech preparation](docs/PERSIAN_SPEECH_NORMALIZATION.md)
+for supported formats, the editable lexicon, and before/after audio previews.
 
 ## Architecture
 
@@ -16,9 +20,10 @@ Django ──creates room + explicit dispatch──► self-hosted LiveKit ◄�
                                       │            │            │
                                 PCM16 16 kHz   streamed text  sentence WAV
                                       ▼            ▼            ▼
-                                  Whisper      RAG + Ollama    Coqui TTS
+                                  Whisper      RAG + Ollama    Mana Piper (CPU)
                                                                     │
-                                                          optional FreeVC
+                                                       optional OpenVoice V2
+                                                          (Tesla P40 FP32)
                                                                     │
                                       LiveKit audio, PCM16 mono 48 kHz
                                                                     ▼
@@ -37,7 +42,7 @@ The existing model implementations remain in `STT`, `LLM`, `TTS`, and `VC`. The 
 3. A non-semantic energy/silence endpoint creates one utterance in memory. No temporary audio file is written.
 4. Whisper receives raw PCM16 and returns its final utterance transcript.
 5. RAG retrieval and Ollama generation stream text tokens. A two-item bounded sentence queue lets TTS start before the whole answer is complete.
-6. The current Coqui and FreeVC implementations return one WAV per sentence; they are not chunk-streaming providers. If enabled, FreeVC converts the sentence WAV. This is the remaining full-buffer audio boundary.
+6. Mana Piper returns one WAV per sentence; it is not a chunk-streaming provider. If enabled, the persistent OpenVoice V2 worker converts that WAV on `cuda:0` in FP32. This is the remaining full-buffer audio boundary.
 7. The agent explicitly decodes PCM16 WAV, downmixes if needed, resamples to mono 48 kHz, splits it into 20 ms frames, and publishes the `agent-audio` LiveKit track.
 
 There is intentionally no semantic endpointing or barge-in. Microphone frames received while the agent is processing/speaking are discarded.
@@ -59,11 +64,18 @@ openssl rand -hex 32
 Then edit `.env` and point the model variables at real host paths. In particular:
 
 - `EMBEDDING_MODEL_PATH_HOST` must contain the sentence-transformer model.
-- `TTS_MODEL_PATH_HOST` must contain the Coqui checkpoint matching `TTS/config.json`.
-- the three `VC_*_PATH_HOST` values must exist when using FreeVC.
+- `TTS_MODEL_DIR_HOST` must contain the pinned Mana ONNX model and JSON config.
+- `VC_CHECKPOINT_DIR_HOST` must contain the pinned OpenVoice V2 converter checkpoint and config.
 - `LLM_MODEL` must already exist in the Ollama volume. For a registry model, run `docker compose exec ollama ollama pull <model>` after Ollama starts. For the existing custom `dorna2`, create/import it using the project’s original Ollama model workflow.
 
-Start without the optional CUDA-only FreeVC service:
+Download or verify the exact pinned speech models and checksums with:
+
+```bash
+python scripts/download_speech_models.py
+python scripts/download_speech_models.py --verify-only
+```
+
+Start without the optional CUDA-only OpenVoice service:
 
 ```bash
 make up
@@ -210,7 +222,7 @@ The complete Unity-facing contract is in [docs/UNITY_LIVEKIT_CONTRACT.md](docs/U
 
 Upload a target-speaker recording as multipart form data. WAV, MP3, M4A, OGG,
 FLAC, and WebM inputs are accepted and normalized to mono 16 kHz PCM WAV for
-FreeVC.
+OpenVoice V2.
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/voice-samples/ \
@@ -242,11 +254,45 @@ Enable voice conversion when creating the LiveKit session:
 ```
 
 Before creating the room, Django verifies that the sample file exists in the
-shared media volume and asks the FreeVC service to confirm it can see the same
+shared media volume and asks the OpenVoice service to confirm it can see the same
 normalized file. Start the stack with the `voice-conversion` profile when this
 option is enabled. `GET /api/v1/voice-samples/` lists available sample IDs.
 Delete an unused sample and its stored audio with
 `DELETE /api/v1/voice-samples/{sample_id}/`.
+
+Voice samples may be 1–60 seconds long. For reliable speaker extraction, use
+6–15 seconds of clean speech from one speaker with little background noise. The
+upload and temporary-reference paths reject recordings with less than 0.8 seconds
+of speech detected after normalization.
+
+### Combined TTS + voice-conversion API
+
+Swagger documents a combined endpoint under **Speech generation**. It accepts
+Persian text plus exactly one target voice: either a persistent `sample_id`
+or a temporary `reference_audio`. Temporary references are normalized and sent
+directly to OpenVoice; they are never added to the voice-sample library.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/speech/jobs/ \
+  -F 'text=سلام، به متارنگ خوش آمدید.' \
+  -F 'sample_id=7'
+```
+
+For a one-request reference:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/speech/jobs/ \
+  -F 'text=این صدا فقط برای همین درخواست استفاده می‌شود.' \
+  -F 'reference_audio=@./reference.wav' \
+  -F 'tau=0.3'
+```
+
+The JSON response contains short-lived `source_audio_url` and
+`converted_audio_url` download links plus TTS/VC timings. Artifacts expire after
+`SPEECH_JOB_RETENTION_SECONDS` (one hour by default). If VC fails, the endpoint
+returns an explicit error by default. Setting `VC_FAILURE_FALLBACK=true` allows
+the original Mana audio and marks `fallback_used=true`; this fallback is never
+silent.
 
 ## Realtime events
 
@@ -299,6 +345,7 @@ Raw audio, prompts, retrieved document text, and complete transcripts are not lo
 make test
 make config
 make smoke WAV=path/to/spoken-test.wav
+make smoke WAV=path/to/spoken-test.wav VECTOR_STORE=user_player/rss_store VOICE_SAMPLE_ID=7
 ```
 
 The smoke client creates a session, connects with the Python LiveKit SDK, publishes a WAV as a microphone track, waits for a final user transcript and agent audio, then deletes the room. It requires a working vector store, Ollama model, STT, and TTS; it does not require Unity.
@@ -332,6 +379,10 @@ make production-up
 
 Do not run that command until DNS, certificates, public IP, firewall rules, secrets, allowed origins, model paths, and TURN topology are configured. See [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md) for the exact checklist and ports.
 
+The pinned model provenance, measured CPU/GPU benchmark, functional verification,
+quality-acceptance boundary, and rollback references are recorded in
+[docs/SPEECH_MIGRATION_REPORT.md](docs/SPEECH_MIGRATION_REPORT.md).
+
 ## Legacy interfaces and known limitations
 
 The old browser panel, Django SSE endpoints, and Channels WebSocket routes remain available for existing testing workflows, but new clients should use LiveKit. The ASGI router now mounts those legacy WebSocket routes correctly.
@@ -341,7 +392,7 @@ Current limitations:
 - no authentication or rate limiting on session creation;
 - final-only user transcripts with Whisper;
 - energy/silence endpointing only, with no semantic turn detection or barge-in;
-- TTS and FreeVC buffer one sentence WAV because the existing providers are non-streaming;
-- FreeVC is CUDA-only and opt-in through the `voice-conversion` profile;
+- Mana Piper and OpenVoice buffer one sentence WAV because the providers are non-streaming;
+- Mana Piper is CPU-only; OpenVoice is CUDA-only, FP32, and opt-in through the `voice-conversion` profile;
 - SQLite prevents safe Django horizontal scaling;
 - Compose is a single-host topology; Kubernetes was intentionally not introduced.

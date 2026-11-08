@@ -30,7 +30,7 @@ test:
 	$(COMPOSE) run --rm web python manage.py test AgentAPI tests --settings=tests.django_settings -v 2
 
 smoke:
-	$(COMPOSE) run --rm --no-deps -v "$(CURDIR):/workspace:ro" agent-worker python /workspace/scripts/livekit_smoke.py --api-url http://web:8000 --livekit-url ws://livekit:7880 --wav-file "/workspace/$(WAV)"
+	$(COMPOSE) run --rm --no-deps -v "$(CURDIR):/workspace:ro" agent-worker python /workspace/scripts/livekit_smoke.py --api-url http://web:8000 --livekit-url ws://livekit:7880 --wav-file "/workspace/$(WAV)" --vector-store "$(or $(VECTOR_STORE),main_store)" $(if $(VOICE_SAMPLE_ID),--voice-sample-id "$(VOICE_SAMPLE_ID)",)
 
 config:
 	$(COMPOSE) --profile production --profile voice-conversion config --quiet
